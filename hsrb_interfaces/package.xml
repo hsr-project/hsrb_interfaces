@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package>
+  <name>hsrb_interfaces</name>
+  <version>1.0.0</version>
+  <description>HSR-B API Libraries</description>
+
+  <maintainer email="xr-hsr-support@mail.toyota.co.jp">HSR Support</maintainer>
+  <author>Takafumi Mizuno</author>
+  <author>ikeda Takuya</author>
+  <author>Akiyoshi Ochiai</author>
+
+  <license>BSD 3-clause Clear License</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <run_depend>hsrb_interface_py</run_depend>
+
+  <export>
+    <metapackage />
+  </export>
+</package>

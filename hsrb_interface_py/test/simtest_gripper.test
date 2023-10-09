@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<launch>
+    <include file="$(find hsrb_interface_py)/test/simtest_common.xml">
+        <arg name="test_name" value="simtest_gripper" />
+        <arg name="time_limit" value="600" />
+    </include>
+</launch>

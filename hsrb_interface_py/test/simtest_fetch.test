@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+    <include file="$(find hsrb_interface_py)/test/simtest_common.xml">
+        <arg name="test_name" value="simtest_fetch" />
+        <arg name="time_limit" value="600" />
+    </include>
+
+    <node name="spawn_marker" pkg="gazebo_ros" type="spawn_model"
+        args="-sdf -model first_aid_box -file $(find tmc_gazebo_worlds)/models/first_aid_box/model-1_4.sdf -x -2.5 -y -6.2 -z 1.1 -Y -1.5707" />
+</launch>
