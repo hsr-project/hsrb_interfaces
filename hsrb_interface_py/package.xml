@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hsrb_interface_py</name>
+  <version>1.0.0</version>
+  <description>HSR-B Python Interface</description>
+
+  <maintainer email="xr-hsr-support@mail.toyota.co.jp">HSR Support</maintainer>
+  <author>Takafumi Mizuno</author>
+  <author>Takuma Sugino</author>
+  <author>Hiromichi Nakashima</author>
+  <author>satoru_onoda</author>
+
+  <license>BSD 3-clause Clear License</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>boost</depend>
+  <depend>hsr_kinematics</depend>
+
+  <build_depend>cmake_modules</build_depend>
+  <build_depend>eigen</build_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <exec_depend>tf2</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <exec_depend version_gte="0.5.16">tf2_ros</exec_depend>
+  <exec_depend>actionlib</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>move_base_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>tmc_msgs</exec_depend>
+  <exec_depend>tmc_vision_msgs</exec_depend>
+  <exec_depend>tmc_planning_msgs</exec_depend>
+  <exec_depend>tmc_manipulation_msgs</exec_depend>
+  <exec_depend>tmc_control_msgs</exec_depend>
+  <exec_depend>python-enum34</exec_depend>
+  <exec_depend condition="$ROS_PYTHON_VERSION == 2">python-lxml</exec_depend>
+  <exec_depend condition="$ROS_PYTHON_VERSION == 3">python3-lxml</exec_depend>
+  <exec_depend condition="$ROS_PYTHON_VERSION == 2">ipython</exec_depend>
+  <exec_depend condition="$ROS_PYTHON_VERSION == 3">ipython3</exec_depend>
+  <exec_depend>urdfdom_py</exec_depend>
+
+  <test_depend condition="$ROS_PYTHON_VERSION == 2">python-mock</test_depend>
+  <test_depend condition="$ROS_PYTHON_VERSION == 3">python3-mock</test_depend>
+  <test_depend>hsrb_gazebo_launch</test_depend>
+  <test_depend>rostest</test_depend>
+  <test_depend>rospy</test_depend>
+
+  <export></export>
+</package>

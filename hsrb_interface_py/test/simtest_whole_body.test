@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+    <include file="$(find hsrb_interface_py)/test/simtest_common.xml">
+        <arg name="test_name" value="simtest_whole_body" />
+        <arg name="time_limit" value="600" />
+    </include>
+
+    <node pkg="tf" type="static_transform_publisher" name="my_frame_publisher"
+          args="1.0 0.5 0.5  0.0 0.0 3.1415 map my_frame 10" />
+</launch>
