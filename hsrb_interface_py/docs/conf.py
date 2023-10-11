@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright (c) 2023 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 
@@ -29,8 +30,6 @@
 # OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 # DAMAGE.
 
-# -*- coding: utf-8 -*-
-#
 # HSR Interface for Python documentation build configuration file, created by
 # sphinx-quickstart on Tue Jun 16 11:25:02 2015.
 #

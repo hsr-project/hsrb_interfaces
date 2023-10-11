@@ -1,13 +1,15 @@
 <?xml version="1.0"?>
 <package>
   <name>hsrb_interfaces</name>
-  <version>1.0.0</version>
+  <version>2.0.0</version>
   <description>HSR-B API Libraries</description>
 
   <maintainer email="xr-hsr-support@mail.toyota.co.jp">HSR Support</maintainer>
+  <author>Keisuke Takeshita</author>
   <author>Takafumi Mizuno</author>
-  <author>ikeda Takuya</author>
-  <author>Akiyoshi Ochiai</author>
+  <author>Takuma Sugino</author>
+  <author>Hiromichi Nakashima</author>
+  <author>satoru_onoda</author>
 
   <license>BSD 3-clause Clear License</license>
 

@@ -1,4 +1,0 @@
-<?xml version="1.0"?>
-<launch>
-  <test test-name="robot_auto_init" pkg="hsrb_interface_py" type="robot-auto-init-test.py" />
-</launch>

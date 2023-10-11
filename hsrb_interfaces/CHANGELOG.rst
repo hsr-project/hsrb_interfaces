@@ -1,7 +1,13 @@
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Changelog for package hsrb_interfaces
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Changelog for package hsrb_interface
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+2.0.0 (2023-10-05)
+-------------------
+* Migration to ROS2 Foxy
+* Contributors: Keisuke Takeshita
 
 1.0.0 (2023-10-05)
+------------------
 * Initial commit
-* Contributors: Takafumi Mizuno, Ikeda Takuya, Akiyoshi Ochiai
+* Contributors: Takafumi Mizuno, Takuma Sugino, Hiromichi Nakashima, satoru_onoda
