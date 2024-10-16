@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-'''
+/*
 Copyright (c) 2024 TOYOTA MOTOR CORPORATION
 All rights reserved.
 Redistribution and use in source and binary forms, with or without
@@ -25,43 +24,48 @@ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
 LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
 OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGE.
-'''
-# vim: fileencoding=utf-8
-"""Unittest for hsrb_interface_py.utils module."""
+*/
+#ifndef HSR_KINEMATICS_HEAD_KINEMATICS_HPP__
+#define HSR_KINEMATICS_HEAD_KINEMATICS_HPP__
 
-import _testing as testing
-from hsrb_interface import Robot
-from hsrb_interface import utils
-from nose.tools import eq_
-import rclpy
-from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
-
-from sensor_msgs.msg import JointState
-
-
-class UtilsTestCase(testing.RosMockTestCase):
-
-    def test_caching_subscriber(self):
-        rclpy.init()
-        robot = Robot()  # noqa: F841
-        qos_profile = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=1)
-        """Test CachingSubscriber class"""
-        sub = utils.CachingSubscriber(
-            "/joint_states",
-            JointState)
-        self.subscriber_mock.assert_called_with(
-            JointState,
-            "/joint_states",
-            sub._callback,
-            qos_profile)
+#include <memory>
+#include <string>
+#include <vector>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+#include <tmc_manipulation_types/manipulation_types.hpp>
+#include <tmc_robot_kinematics_model/robot_kinematics_model.hpp>
 
 
-def test_iterate():
-    """Test iterate function."""
-    data = list(utils.iterate(lambda: 2, 5))
-    eq_(len(data), 5)
-    for datum in data:
-        eq_(2, datum)
+namespace hsr_kinematics {
+
+bool CalculateHeadAngleToGazePoint(
+    const Eigen::Translation3d& head_center_yaw_to_gaze_point,
+    const Eigen::Affine3d& head_center_yaw_to_camera_frame,
+    const Eigen::Affine3d& head_center_yaw_to_head_center_pitch,
+    tmc_manipulation_types::JointState& dst_head_angle);
+
+class HsrHeadKinematics {
+ public:
+  typedef std::shared_ptr<HsrHeadKinematics> Ptr;
+
+  HsrHeadKinematics(const std::string& robot_model_config,
+                    const std::vector<std::string>& head_joint_names);
+
+  bool CalculateAngleToGazePoint(
+      const Eigen::Translation3d& robot_base_to_gaze_point,
+      const std::string& camera_frame_name,
+      const tmc_manipulation_types::JointState& current_joint_state,
+      tmc_manipulation_types::JointState& dst_head_angle);
+
+ private:
+  void SaturateToAngleLimit_(double angle,
+                             const std::string& joint_name,
+                             double& dst_angle);
+  tmc_robot_kinematics_model::IRobotKinematicsModel::Ptr robot_model_;
+  std::string pan_joint_name_;
+  std::string tilt_joint_name_;
+};
+}  // namespace hsr_kinematics
+
+#endif  // HSR_KINEMATICS_HEAD_KINEMATICS_HPP__

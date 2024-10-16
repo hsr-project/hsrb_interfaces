@@ -1,58 +1,52 @@
+'''
+Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+All rights reserved.
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the disclaimer
+below) provided that the following conditions are met:
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+* Neither the name of the copyright holder nor the names of its contributors may be used
+  to endorse or promote products derived from this software without specific
+  prior written permission.
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
+LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+'''
 # vim: fileencoding=utf-8
-# Copyright (c) 2023 TOYOTA MOTOR CORPORATION
-# All rights reserved.
-
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted (subject to the limitations in the disclaimer
-# below) provided that the following conditions are met:
-
-# * Redistributions of source code must retain the above copyright notice, this
-#   list of conditions and the following disclaimer.
-
-# * Redistributions in binary form must reproduce the above copyright notice,
-#   this list of conditions and the following disclaimer in the documentation
-#   and/or other materials provided with the distribution.
-
-# * Neither the name of the copyright holder nor the names of its contributors may be used
-#   to endorse or promote products derived from this software without specific
-#   prior written permission.
-
-# NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
-# LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-# GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
-# OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
-# DAMAGE.
-
 """This module classes and functions that manipulate joint trajectories"""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 import copy
 from itertools import repeat
-import threading
+import time
 import traceback
 
-from action_msgs.msg import GoalStatus
+import action_msgs.msg as action_msgs
 from control_msgs.action import FollowJointTrajectory
-from rcl_interfaces.srv import GetParameters
+from moveit_msgs.msg import MoveItErrorCodes
 import rclpy
-from rclpy.duration import Duration
+from rclpy.action import ActionClient
+import tf_transformations as T
 from tmc_manipulation_msgs.srv import FilterJointTrajectory
 from trajectory_msgs.msg import JointTrajectory
+
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 from . import exceptions
 from . import geometry
+from . import robot
 from . import settings
 from . import utils
 
@@ -96,14 +90,16 @@ def extract(trajectory, joint_names, joint_state):
         target.positions = list(repeat(0.0, num_joints))
         target.velocities = list(repeat(0.0, num_joints))
         target.accelerations = list(repeat(0.0, num_joints))
-        target.effort = list(repeat(0.0, num_joints))
+        # Effort has not supported in ROS2
+        # target.effort = list(repeat(0.0, num_joints))
         target.time_from_start = source.time_from_start
         # Check the point has enough elements
         # FIXME: If the given trajectory is well-formed, this check is not
         #        necessary. Actually we meet malformed trajectory sometime.
         has_velocities = (len(source.velocities) == num_source_joints)
         has_accelerations = (len(source.accelerations) == num_source_joints)
-        has_effort = (len(source.effort) == num_source_joints)
+        # Effort has not supported in ROS2
+        # has_effort = (len(source.effort) == num_source_joints)
         for joint_index in range(num_joints):
             if index_map[joint_index] != -1:
                 pos = source.positions[index_map[joint_index]]
@@ -114,16 +110,18 @@ def extract(trajectory, joint_names, joint_state):
                 if has_accelerations:
                     acc = source.accelerations[index_map[joint_index]]
                     target.accelerations[joint_index] = acc
-                if has_effort:
-                    eff = source.effort[index_map[joint_index]]
-                    target.effort[joint_index] = eff
+                # Effort has not supported in ROS2
+                # if has_effort:
+                #    eff = source.effort[index_map[joint_index]]
+                #    target.effort[joint_index] = eff
             else:
                 i = joint_state.name.index(joint_names[joint_index])
                 angle = joint_state.position[i]
                 target.positions[joint_index] = angle
                 target.velocities[joint_index] = 0.0
                 target.accelerations[joint_index] = 0.0
-                target.effort[joint_index] = 0.0
+                # Effort has not supported in ROS2
+                # target.effort[joint_index] = 0.0
     return trajectory_out
 
 
@@ -166,6 +164,34 @@ def merge(target, source):
     return merged
 
 
+def timeopt_filter(base_trajectory, node):
+    """Apply timeopt filter to a omni-base trajectory.
+
+    Args:
+        joint_trajectory (trajectory_msgs.msg.JointTrajectory):
+            A trajectory that will be applied this filter
+    Returns:
+        trajectory_msgs.msg.JointTrajectory:
+            Filtered trajectory
+    """
+    service = settings.get_entry("trajectory", "timeopt_filter_service")
+    filter_service = node.create_client(FilterJointTrajectory, service)
+    req = FilterJointTrajectory.Request()
+    req.trajectory = base_trajectory
+    try:
+        future = filter_service.call_async(req)
+        rclpy.spin_until_future_complete(node, future)
+        res = future.result()
+        if res.error_code.val != MoveItErrorCodes.SUCCESS:
+            msg = "Failed to filter trajectory" + str(type(res.error_code))
+            raise exceptions.TrajectoryFilterError(msg, res.error_code)
+    except Exception:
+        traceback.print_exc()
+        raise
+    filtered_traj = res.trajectory
+    return filtered_traj
+
+
 def hsr_timeopt_filter(merged_trajectory, start_state, node):
     """whole body timeopt filter.
 
@@ -179,13 +205,7 @@ def hsr_timeopt_filter(merged_trajectory, start_state, node):
     """
     service = settings.get_entry("trajectory", "whole_timeopt_filter_service")
     caster_joint = settings.get_entry("trajectory", "caster_joint")
-    filter_client = node.create_client(
-        FilterJointTrajectory,
-        service
-    )
-    while not filter_client.wait_for_service(timeout_sec=1.0):
-        node.get_logger().info(
-            f'{service} service not available, waiting again...')
+    filter_service = node.create_client(FilterJointTrajectory, service)
     req = FilterJointTrajectory.Request()
     req.trajectory = merged_trajectory
 
@@ -194,27 +214,26 @@ def hsr_timeopt_filter(merged_trajectory, start_state, node):
     whole_pos = [start_state.position[start_state.name.index(joint)]
                  for joint in whole_name]
     req.start_state.joint_state.position = whole_pos
-    event = threading.Event()
-
-    def done_callback(future):
-        nonlocal event
-        event.set()
 
     try:
-        res_future = filter_client.call_async(req)
-        res_future.add_done_callback(done_callback)
-        event.wait()
-        res = res_future.result()
-        event.clear()
+        future = filter_service.call_async(req)
+        rclpy.spin_until_future_complete(node, future)
+        res = future.result()
         if not res.is_success:
             return None
     except Exception:
         traceback.print_exc()
         raise
-    return res.trajectory
+    filtered_traj = res.trajectory
+    return filtered_traj
 
 
-def transform_base_trajectory(base_traj, tf2_buffer, tf_timeout, joint_names, node):
+def transform_base_trajectory(
+        base_traj,
+        tf2_buffer,
+        tf_timeout,
+        joint_names,
+        node):
     """Transform a base trajectory to an ``odom`` frame based trajectory.
 
     Args:
@@ -228,11 +247,13 @@ def transform_base_trajectory(base_traj, tf2_buffer, tf_timeout, joint_names, no
         trajectory_msgs.msg.JointTrajectory:
             A base trajectory based on ``odom`` frame.
     """
+    now = rclpy.time.Time()
+    dur = rclpy.duration.Duration(seconds=tf_timeout)
     odom_to_frame_transform = tf2_buffer.lookup_transform(
         _BASE_TRAJECTORY_ORIGIN,
         base_traj.header.frame_id,
-        node.get_clock().now(),
-        Duration(seconds=tf_timeout))
+        now,
+        dur)
     odom_to_frame = geometry.transform_to_tuples(
         odom_to_frame_transform.transform)
 
@@ -249,12 +270,14 @@ def transform_base_trajectory(base_traj, tf2_buffer, tf_timeout, joint_names, no
         t = base_traj.points[i].transforms[0]
         frame_to_base = geometry.transform_to_tuples(t)
 
+        # odom_to_base = odom_to_frame * frame_to_base
         (odom_to_base_trans, odom_to_base_rot) = geometry.multiply_tuples(
             odom_to_frame, frame_to_base)
-        odom_base_traj.points[i].positions = [odom_to_base_trans[0],
-                                              odom_to_base_trans[1],
-                                              0.0]
-        roll, pitch, yaw = geometry.quat_to_eul(odom_to_base_rot)
+        odom_base_traj.points[i].positions = [float(odom_to_base_trans[0]),
+                                              float(odom_to_base_trans[1]),
+                                              float(0.0)]
+        roll, pitch, yaw = T.euler_from_quaternion(
+            odom_to_base_rot)
         dtheta = geometry.shortest_angular_distance(previous_theta, yaw)
         theta = previous_theta + dtheta
 
@@ -263,8 +286,8 @@ def transform_base_trajectory(base_traj, tf2_buffer, tf_timeout, joint_names, no
     return odom_base_traj
 
 
-class TrajectoryController(object):
-    """Wrapper class for FollowJointTrajectoryAction
+class TrajectoryController(robot.Item):
+    """Wrapper class for FollowJointTrajectory
 
     Args:
         controller_name (str):
@@ -277,45 +300,61 @@ class TrajectoryController(object):
         controller_name (str): A name of a target controller.
     """
 
-    def __init__(self, controller_name, node, joint_names_suffix="joints"):
+    def __init__(self, controller_name, joint_names_suffix="joints"):
+        super(TrajectoryController, self).__init__()
         """See class docstring."""
         self._controller_name = controller_name
-        self._node = node
-        self._goal_handle = None
         action = controller_name + "/follow_joint_trajectory"
-        self._client = rclpy.action.ActionClient(
-            self._node,
-            FollowJointTrajectory,
-            action)
+        self._client = ActionClient(self._node, FollowJointTrajectory, action)
         timeout = settings.get_entry('trajectory', 'action_timeout')
         self._client.wait_for_server(timeout)
-        srv_name = "{0}/get_parameters".format(self._controller_name)
-        self._param_client = self._node.create_client(GetParameters, srv_name)
-        request = GetParameters.Request()
-        request.names = [joint_names_suffix]
-        self._param_client.wait_for_service(timeout)
-        future = self._param_client.call_async(request)
-        future.add_done_callback(self.callback_global_param)
-        self._joint_names = []
+        param_name = "{0}".format(
+            joint_names_suffix
+        )
+        res = utils.get_parameters_from_another_node(
+            self._node, self._controller_name + '/get_parameters', [param_name])
+        if len(res) != 0:
+            self._joint_names = res[0]
 
     def submit(self, trajectory):
         """Send a trajectory to a connecting controller."""
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = trajectory
         self._send_goal_future = self._client.send_goal_async(goal)
-        self._send_goal_future.add_done_callback(self._goal_response_callback)
+        rclpy.spin_until_future_complete(
+            self._node, self._send_goal_future, timeout_sec=1.0)
 
     def cancel(self):
         """Cancel a current goal."""
-        if self._goal_handle is None:
-            return
-        self._goal_handle.cancel_goal()
+        goal_handle = self._send_goal_future.result()
+        goal_handle.cancel_goal_async()
 
     def get_state(self):
         """Get a status of the action client"""
-        if self._goal_handle is None:
-            return GoalStatus.STATUS_UNKNOWN
-        return self._goal_handle.status
+        goal_handle = self._send_goal_future.result()
+        get_result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(
+            self._node, get_result_future, timeout_sec=1.0)
+        res = get_result_future.result()
+        if res is None:
+            return action_msgs.GoalStatus.STATUS_EXECUTING
+        else:
+            return res.status
+
+    def get_status_text(self):
+        """Get a goal status text of the action client"""
+        status_strings = {
+            action_msgs.GoalStatus.STATUS_UNKNOWN: "STATUS_UNKNOWN",  # noqa
+            action_msgs.GoalStatus.STATUS_ACCEPTED: "STATUS_ACCEPTED",  # noqa
+            action_msgs.GoalStatus.STATUS_EXECUTING: "STATUS_EXECUTING",  # noqa
+            action_msgs.GoalStatus.STATUS_CANCELING: "STATUS_CANCELING",  # noqa
+            action_msgs.GoalStatus.STATUS_SUCCEEDED: "STATUS_SUCCEEDED",  # noqa
+            action_msgs.GoalStatus.STATUS_CANCELED: "STATUS_CANCELED",  # noqa
+            action_msgs.GoalStatus.STATUS_ABORTED: "STATUS_ABORTED"  # noqa
+        }
+        future = self._client._async()
+        result_status = future.result().status
+        return status_strings[result_status]
 
     def get_result(self, timeout=None):
         """Get a result of a current goal.
@@ -323,19 +362,18 @@ class TrajectoryController(object):
         Returns:
             FollowJointTrajectoryResult: Execution result
         """
-        if self._goal_handle is None:
-            return None
-        if self._goal_handle.get_result() is None:
+        goal_handle = self._send_goal_future.result()
+        if goal_handle.get_result_async() is None:
             return None
 
-        state = self._goal_handle.status
-        result = self._goal_handle.get_result()
-
-        if result.error_code != FollowJointTrajectory.Result.SUCCESSFUL:
+        future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self._node, future)
+        result = future.result()
+        if result.result.error_code != FollowJointTrajectory.Result.SUCCESSFUL:
             msg = "{0}".format(result.error_code)
             raise exceptions.FollowTrajectoryError(msg)
-        if state != GoalStatus.STATUS_SUCCEEDED:
-            raise exceptions.FollowTrajectoryError("{0}".format(state))
+        if result.status != action_msgs.GoalStatus.STATUS_SUCCEEDED:
+            raise exceptions.FollowTrajectoryError("{0}".format(result.status))
         return result
 
     def _get_joint_names(self):
@@ -346,36 +384,13 @@ class TrajectoryController(object):
         return self._controller_name
     controller_name = property(_get_controller_name)
 
-    def _goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            return
-        self._goal_handle = goal_handle
-        future = goal_handle.get_result_async()
-        future.add_done_callback(self._get_result_callback)
 
-    def _get_result_callback(self, future):
-        goal_handle = future.result()
-        self._goal_handle = goal_handle
-
-    def callback_global_param(self, future):
-        try:
-            result = future.result()
-        except Exception:
-            return
-        else:
-            param = result.values[0]
-            self._joint_names = param.string_array_value
-
-
-def wait_controllers(controllers, node):
+def wait_controllers(node, controllers):
     watch_rate = settings.get_entry('trajectory', 'watch_rate')
-    rate = node.create_rate(watch_rate)
     ok_set = {
-        GoalStatus.STATUS_UNKNOWN,
-        GoalStatus.STATUS_ACCEPTED,
-        GoalStatus.STATUS_EXECUTING,
-        GoalStatus.STATUS_SUCCEEDED,
+        action_msgs.GoalStatus.STATUS_UNKNOWN,
+        action_msgs.GoalStatus.STATUS_EXECUTING,
+        action_msgs.GoalStatus.STATUS_SUCCEEDED,
     }
     try:
         while True:
@@ -389,9 +404,9 @@ def wait_controllers(controllers, node):
                 reason = ', '.join(log)
                 text = "Playing trajectory failed: {0}".format(reason)
                 raise exceptions.FollowTrajectoryError(text)
-            if all([s == GoalStatus.STATUS_SUCCEEDED for s in states]):
+            if all([s == action_msgs.GoalStatus.STATUS_SUCCEEDED for s in states]):
                 break
-            rate.sleep()
+            time.sleep(float(1.0 / watch_rate))
     except KeyboardInterrupt:
         for c in controllers:
             c.cancel()

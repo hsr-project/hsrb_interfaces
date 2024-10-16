@@ -1,55 +1,54 @@
+'''
+Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+All rights reserved.
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the disclaimer
+below) provided that the following conditions are met:
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+* Neither the name of the copyright holder nor the names of its contributors may be used
+  to endorse or promote products derived from this software without specific
+  prior written permission.
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
+LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+'''
 # vim: fileencoding=utf-8
-# Copyright (c) 2023 TOYOTA MOTOR CORPORATION
-# All rights reserved.
-
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted (subject to the limitations in the disclaimer
-# below) provided that the following conditions are met:
-
-# * Redistributions of source code must retain the above copyright notice, this
-#   list of conditions and the following disclaimer.
-
-# * Redistributions in binary form must reproduce the above copyright notice,
-#   this list of conditions and the following disclaimer in the documentation
-#   and/or other materials provided with the distribution.
-
-# * Neither the name of the copyright holder nor the names of its contributors may be used
-#   to endorse or promote products derived from this software without specific
-#   prior written permission.
-
-# NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
-# LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-# GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
-# OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
-# DAMAGE.
-
 """This module contains classes and functions to move joints."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
+import asyncio
 import math
 import sys
-import threading
 import warnings
 
 from geometry_msgs.msg import Pose as RosPose
+from geometry_msgs.msg import TransformStamped
+from hsrb_interface_py._extension import KinematicsInterface
 from moveit_msgs.msg import MoveItErrorCodes
+
 import numpy as np
+
 import rclpy
-from rclpy.duration import Duration
+
 from sensor_msgs.msg import JointState
-import std_msgs.msg
+
+import tf2_ros
+import tf_transformations as T
+
 from tmc_manipulation_msgs.msg import BaseMovementType
+
 from tmc_planning_msgs.msg import JointPosition
 from tmc_planning_msgs.msg import TaskSpaceRegion
 from tmc_planning_msgs.srv import PlanWithHandGoals
@@ -57,10 +56,16 @@ from tmc_planning_msgs.srv import PlanWithHandLine
 from tmc_planning_msgs.srv import PlanWithJointGoals
 from tmc_planning_msgs.srv import PlanWithTsrConstraints
 
+import urdf_parser_py.urdf as urdf
+
+
+from visualization_msgs.msg import Marker
+from visualization_msgs.msg import MarkerArray
+
+from . import collision_world
 from . import exceptions
 from . import geometry
 from . import robot
-from . import robot_model
 from . import settings
 from . import trajectory
 from . import utils
@@ -69,10 +74,10 @@ from . import utils
 _DEBUG = False
 
 # Timeout for motion planning [sec]
-_PLANNING_ARM_TIMEOUT = 10.0
+_PLANNING_ARM_TIMEOUT = 30.0
 
 # Max number of iteration of moition planning
-_PLANNING_MAX_ITERATION = 10000
+_PLANNING_MAX_ITERATION = 100000
 
 # Goal generation probability in moition planning
 _PLANNING_GOAL_GENERATION = 0.3
@@ -117,7 +122,7 @@ def _pose_from_x_axis(axis):
     if np.linalg.norm(outerp) < sys.float_info.epsilon:
         outerp = np.array([0, 1, 0])
     outerp = _normalize_np(outerp)
-    q = geometry.quaternion_about_axis(theta, outerp)
+    q = T.quaternion_about_axis(theta, outerp)
     return geometry.Pose(geometry.Vector3(0, 0, 0), geometry.Quaternion(*q))
 
 
@@ -154,7 +159,11 @@ def _invert_pose(pose):
     Returns:
         geometry.Pose: The result of computation
     """
-    return geometry.invert_pose(pose)
+    m = T.compose_matrix(translate=pose[0],
+                         angles=T.euler_from_quaternion(pose[1]))
+    (_, _, euler, trans, _) = T.decompose_matrix(T.inverse_matrix(m))
+    q = T.quaternion_from_euler(euler[0], euler[1], euler[2])
+    return geometry.Pose(geometry.Vector3(*trans), geometry.Quaternion(*q))
 
 
 class JointGroup(robot.Item):
@@ -169,7 +178,7 @@ class JointGroup(robot.Item):
             A latest joint states.
         joint_limits (Dict[str, float]):
             Joint limits of a robot.
-        collision_world (hsrb_interface_py.collsion_world.CollisionWorld):
+        collision_world (hsrb_interface.collsion_world.CollisionWorld):
             A present collision world to check collision.
             If None, collision checking is disabled.
         linear_weight (float):
@@ -191,47 +200,49 @@ class JointGroup(robot.Item):
             If true, time-optimal filter is applied to a base trajectory.
         looking_hand_constraint (bool):
             If true, the robot hand is in the robot view after the execution
-            of move_end_effector_*.
+            of move_end_effector_*.bot
+        constraint_tsrs (List[TaskSpaceRegion]):
+            A list of constraint of task space region.
     """
 
     def __init__(self, name):
         """See class docstring."""
-        self._event = threading.Event()
         super(JointGroup, self).__init__()
         self._setting = settings.get_entry('joint_group', name)
         self._position_control_clients = []
         arm_config = self._setting['arm_controller_prefix']
         self._position_control_clients.append(
-            trajectory.TrajectoryController(arm_config, self._node))
+            trajectory.TrajectoryController(arm_config))
         head_config = self._setting['head_controller_prefix']
         self._position_control_clients.append(
-            trajectory.TrajectoryController(head_config, self._node))
+            trajectory.TrajectoryController(head_config))
+        """
         hand_config = self._setting["hand_controller_prefix"]
         self._position_control_clients.append(
-            trajectory.TrajectoryController(hand_config, self._node))
+            trajectory.TrajectoryController(hand_config,self._node ))
+        """
         base_config = self._setting["omni_base_controller_prefix"]
         self._base_client = trajectory.TrajectoryController(
-            base_config, self._node, "base_coordinates")
+            base_config, "base_coordinates")
         self._position_control_clients.append(self._base_client)
-        # imp_config = settings.get_entry("trajectory", "impedance_control")
-        # self._impedance_client = trajectory.ImpedanceController(imp_config)
+        """
+        imp_config = settings.get_entry("trajectory", "impedance_control")
+        self._impedance_client = trajectory.ImpedanceController(imp_config,self._node )
+        """
         joint_state_topic = self._setting["joint_states_topic"]
-        try:
-            self._joint_state_sub = utils.CachingSubscriber(
-                joint_state_topic,
-                JointState,
-                self._node,
-                default=JointState())
-            timeout = self._setting.get('timeout', None)
-            self._joint_state_sub.wait_for_message(timeout)
-        except Exception as e:
-            raise exceptions.RobotConnectionError(e)
+        self._joint_state_sub = utils.CachingSubscriber(
+            joint_state_topic,
+            JointState,
+            default=JointState())
+        self._joint_state_sub.wait_for_message(20.0)
         self._tf2_buffer = robot._get_tf2_buffer()
         self._end_effector_frames = self._setting['end_effector_frames']
         self._end_effector_frame = self._end_effector_frames[0]
         self._passive_joints = self._setting['passive_joints']
-        self._robot_urdf = self._get_robot_urdf()
-
+        urdf_string = utils.get_parameters_from_another_node(
+            self._node, "/robot_rrt_planner_node/get_parameters", ["robot_description"])
+        self._robot_urdf = urdf.URDF.from_xml_string(urdf_string[0])
+        self._kinematics_interface = KinematicsInterface(urdf_string[0])
         self._collision_world = None
         self._linear_weight = 3.0
         self._angular_weight = 1.0
@@ -239,12 +250,12 @@ class JointGroup(robot.Item):
         self._planning_timeout = _PLANNING_ARM_TIMEOUT
         self._use_base_timeopt = True
         self._looking_hand_constraint = False
+        self._constraint_tsrs = []
         self._tf_timeout = _TF_TIMEOUT
 
-        # if _DEBUG:
-        #     self._vis_pub = rospy.Publisher("tsr_marker", MarkerArray,
-        #                                     queue_size=1)
-        #     self._tf2_pub = tf3_ros.TransformBroadcaster()
+        if _DEBUG:
+            self._vis_pub = self.create_publisher(MarkerArray, "tsr_marker", 1)
+            self._tf2_pub = tf2_ros.TransformBroadcaster()
 
     def _get_joint_state(self):
         """Get a current joint state.
@@ -253,30 +264,6 @@ class JointGroup(robot.Item):
             sensor_msgs.JointState: Current joint state
         """
         return self._joint_state_sub.data
-
-    def _get_robot_urdf(self):
-        urdf = None
-
-        def get_urdf(event, description):
-            nonlocal urdf
-            urdf = robot_model.RobotModel.from_xml_string(description)
-            event.set()
-
-        self._node.create_subscription(
-            std_msgs.msg.String,
-            'robot_description',
-            lambda msg: get_urdf(self._event, msg.data),
-            rclpy.qos.QoSProfile(
-                depth=1,
-                durability=rclpy.qos.QoSDurabilityPolicy.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL
-            )
-        )
-        self._event.wait()
-        self._event.clear()
-        return urdf
-
-    def _done_callback(self, future):
-        self._event.set()
 
     @property
     def joint_names(self):
@@ -303,18 +290,18 @@ class JointGroup(robot.Item):
                              joint_map[joint_name].limit.upper)
                 for joint_name in self.joint_names}
 
-    # @property
-    # def collision_world(self):
-    #     return self._collision_world
+    @property
+    def collision_world(self):
+        return self._collision_world
 
-    # @collision_world.setter
-    # def collision_world(self, value):
-    #     if value is None:
-    #         self._collision_world = None
-    #     elif isinstance(value, collision_world.CollisionWorld):
-    #         self._collision_world = value
-    #     else:
-    #         raise TypeError("value should be CollisionWorld instance")
+    @collision_world.setter
+    def collision_world(self, value):
+        if value is None:
+            self._collision_world = None
+        elif isinstance(value, collision_world.CollisionWorld):
+            self._collision_world = value
+        else:
+            raise TypeError("value should be CollisionWorld instance")
 
     @property
     def linear_weight(self):
@@ -368,25 +355,25 @@ class JointGroup(robot.Item):
         else:
             raise ValueError("value should be positive")
 
-    # @property
-    # def impedance_config(self):
-    #     return self._impedance_client.config
+    @property
+    def impedance_config(self):
+        return self._impedance_client.config
 
-    # @impedance_config.setter
-    # def impedance_config(self, value):
-    #     self._impedance_client.config = value
+    @impedance_config.setter
+    def impedance_config(self, value):
+        self._impedance_client.config = value
 
-    # @property
-    # def impedance_config_names(self):
-    #     return self._impedance_client.config_names
+    @property
+    def impedance_config_names(self):
+        return self._impedance_client.config_names
 
-    # @property
-    # def use_base_timeopt(self):
-    #     return self._use_base_timeopt
+    @property
+    def use_base_timeopt(self):
+        return self._use_base_timeopt
 
-    # @use_base_timeopt.setter
-    # def use_base_timeopt(self, value):
-    #     self._use_base_timeopt = value
+    @use_base_timeopt.setter
+    def use_base_timeopt(self, value):
+        self._use_base_timeopt = value
 
     @property
     def tf_timeout(self):
@@ -419,29 +406,69 @@ class JointGroup(robot.Item):
     def end_effector_frames(self):
         return tuple(self._end_effector_frames)
 
-    # @property
-    # def looking_hand_constraint(self):
-    #     return self._looking_hand_constraint
+    @property
+    def looking_hand_constraint(self):
+        return self._looking_hand_constraint
 
-    # @looking_hand_constraint.setter
-    # def looking_hand_constraint(self, value):
-    #     self._looking_hand_constraint = value
+    @looking_hand_constraint.setter
+    def looking_hand_constraint(self, value):
+        self._looking_hand_constraint = value
 
-    def _change_joint_state(self, goal_state):
+    @property
+    def constraint_tsrs(self):
+        return self._constraint_tsrs
+
+    @constraint_tsrs.setter
+    def constraint_tsrs(self, value):
+        if not isinstance(value, list):
+            raise ValueError("value should be list")
+        for constraint_tsr in value:
+            if not isinstance(constraint_tsr, TaskSpaceRegion):
+                raise TypeError("value should be TaskSpaceRegion instance")
+        self._constraint_tsrs = value
+
+    def _set_constraint_tsrs(self, req):
+        if len(self._constraint_tsrs) > 0:
+            # It is important to put TSR here
+            # Since this request variable is also found in hands goals, etc., TSR constraints should be added in the same way.
+            req.constraint_tsrs = self._constraint_tsrs
+            # If you restrict only the posture transition, it is necessary that the bogie can move.
+            # This process is not required except for the gaze transition
+            #
+            # The IK is solving in the middle of the process, but if it is less than 6 flexibility, IK itself becomes an error.
+            # In the first place, I felt weird to solve the IK for constraints in CBirrt2, but what do you do?
+            # If you want to implement without using IK, comment out +
+            # In ConstraintotSr of tmc_manipulation_planner/tmc_robot_planner/src/Robot_cbirrt_planner.cpp
+            # In the else part of CalcDistanceTotsR, suddenly Return False; +
+            # _Planning_max_iteration increase by about a single digit
+            # It is unknown which IK is used/uses, and which is better
+            #
+            if req.base_movement_type.val is BaseMovementType.NONE:
+                # PLANWITHJOINTGOALSREQUEST only _generate_planning_request is set to None
+                req.base_movement_type.val = BaseMovementType.RAIL_X
+                req.weighted_joints = ['_linear_base']
+                req.weight = [100.0]
+        return req
+
+    def _change_joint_state(self, joint_names, joint_positions_seq):
         """Move joints to specified joint state while checking self collision.
 
         Args:
-            goal_state (sensor_msgs.msg.JointState): Target joint state
+            joint_names (List[str]):
+                A list of joint name.
+            joint_positions_seq (List[List[float]]):
+                A list of target position [m or rad].
         Returns:
             None
         Raises:
             ValueError: Some specified joints are not found.
             ValueError: Target joints include some uncontrollable joints.
+            ValueError: The number of joint_names and joint_positions are different.
         """
         # Validate joint names
         initial_joint_state = self._get_joint_state()
         active_joint_set = set(initial_joint_state.name)
-        target_joint_set = set(goal_state.name)
+        target_joint_set = set(joint_names)
         if not target_joint_set.issubset(active_joint_set):
             unknown_set = target_joint_set.difference(active_joint_set)
             msg = "No such joint(s): [{0}]".format(', '.join(unknown_set))
@@ -455,30 +482,80 @@ class JointGroup(robot.Item):
             msg = "Passive joint(s): [{0}]".format(', '.join(intersected))
             raise ValueError(msg)
 
-        req = self._generate_planning_request(PlanWithJointGoals)
-        goal_position = JointPosition()
-        goal_position.position = goal_state.position
-        req.use_joints = goal_state.name
-        req.goal_joint_states.append(goal_position)
+        req = self._generate_planning_request(PlanWithJointGoals.Request)
+        req.use_joints = joint_names
+        for joint_positions in joint_positions_seq:
+            if len(joint_names) != len(joint_positions):
+                raise ValueError("The number of joint_names and joint_positions are different")
+            goal_position = JointPosition()
+            goal_position.position = joint_positions
+            req.goal_joint_states.append(goal_position)
+
+        req = self._set_constraint_tsrs(req)
 
         service_name = self._setting['plan_with_joint_goals_service']
-        plan_client = self._node.create_client(
+        plan_service = self._node.create_client(
             PlanWithJointGoals, service_name)
-        while not plan_client.wait_for_service(timeout_sec=1.0):
-            self._node.get_logger().info(
-                f'{service_name} service not available, waiting again...')
-        res_future = plan_client.call_async(req)
-
-        res_future.add_done_callback(self._done_callback)
-        self._event.wait()
-        res = res_future.result()
-        self._event.clear()
+        future = plan_service.call_async(req)
+        rclpy.spin_until_future_complete(self._node, future)
+        res = future.result()
         if res.error_code.val != MoveItErrorCodes.SUCCESS:
             msg = "Fail to plan change_joint_state"
             raise exceptions.MotionPlanningError(msg, res.error_code)
         res.base_solution.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(res.solution)
         self._execute_trajectory(constrained_traj)
+
+    def move_to_joint_positions_multiple_targets(self, joint_names, joint_positions_seq):
+        """Move joints to goal positions with constraint.
+
+        Args:
+            joint_names (List[str]):
+                A list of joint name.
+            joint_positions_seq (List[List[float]]):
+                A list of target position [m or rad].
+
+        Returns:
+            None
+
+        Raises:
+            ValueError: Some specified joints are not found.
+            ValueError: Target joints include some uncontrollable joints.
+            ValueError: The number of joint_names and joint_positions are different.
+
+        See Also:
+            :py:attr:`.joint_names`
+
+        Examples:
+
+            .. sourcecode:: python
+
+                import math
+                import hsrb_interface
+
+                with hsrb_interface.Robot() as robot:
+                    whole_body = robot.get('whole_body')
+
+                    joint_names = [
+                        'arm_flex_joint', 'arm_lift_joint', 'arm_roll_joint',
+                        'wrist_flex_joint', 'wrist_roll_joint'
+                    ]
+                    joint_positions_seq = [
+                        [0.0, 0.0, -1.57, -1.57, 0.0],
+                        [-0.3, 0.0, 0.0, -1.72, 1.57],
+                        [-0.3, 0.0, 0.0, -1.72, -1.57]
+                    ]
+
+                    whole_body.move_to_joint_positions_multiple_targets(
+                        joint_names,
+                        joint_positions_seq
+                    )
+
+        """
+        if not joint_names:
+            return
+
+        self._change_joint_state(joint_names, joint_positions_seq)
 
     def move_to_joint_positions(self, goals={}, **kwargs):
         """Move joints to a specified goal positions.
@@ -522,11 +599,12 @@ class JointGroup(robot.Item):
         goals.update(kwargs)
         if not goals:
             return
-        goal_state = JointState()
+        joint_names = []
+        joint_positions = []
         for k, v in goals.items():
-            goal_state.name.append(k)
-            goal_state.position.append(v)
-        self._change_joint_state(goal_state)
+            joint_names.append(k)
+            joint_positions.append(v)
+        self._change_joint_state(joint_names, [joint_positions])
 
     def move_to_neutral(self):
         """Move joints to neutral(initial) pose of a robot."""
@@ -563,14 +641,22 @@ class JointGroup(robot.Item):
         # Default reference frame is a robot frame
         if ref_frame_id is None:
             ref_frame_id = settings.get_frame('base')
-        transform = self._tf2_buffer.lookup_transform(
-            ref_frame_id,
-            self._end_effector_frame,
-            self._node.get_clock().now(),
-            Duration(seconds=self._tf_timeout)
+
+        tf_future = self._tf2_buffer.wait_for_transform_async(
+            target_frame=ref_frame_id,
+            source_frame=self._end_effector_frame,
+            time=rclpy.time.Time()
         )
-        result = geometry.transform_to_tuples(transform.transform)
-        return result
+        rclpy.spin_until_future_complete(
+            self._node, tf_future, timeout_sec=self._tf_timeout)
+
+        transform = asyncio.run(self._tf2_buffer.lookup_transform_async(
+            self._end_effector_frame,
+            ref_frame_id,
+            rclpy.time.Time()
+        ))
+
+        return geometry.transform_to_tuples(transform.transform)
 
     def _lookup_odom_to_ref(self, ref_frame_id):
         """Resolve current reference frame transformation from ``odom``.
@@ -579,13 +665,21 @@ class JointGroup(robot.Item):
             geometry_msgs.msg.Pose:
                 A transform from robot ``odom`` to ``ref_frame_id``.
         """
-        odom_to_ref_ros = self._tf2_buffer.lookup_transform(
+        tf_future = self._tf2_buffer.wait_for_transform_async(
+            target_frame=settings.get_frame('odom'),
+            source_frame=ref_frame_id,
+            time=rclpy.time.Time()
+        )
+        rclpy.spin_until_future_complete(
+            self._node, tf_future, timeout_sec=self._tf_timeout)
+
+        odom_to_ref_ros = asyncio.run(self._tf2_buffer.lookup_transform_async(
             settings.get_frame('odom'),
             ref_frame_id,
-            self._node.get_clock().now(),
-            Duration(seconds=self._tf_timeout)
-        ).transform
-        odom_to_ref_tuples = geometry.transform_to_tuples(odom_to_ref_ros)
+            rclpy.time.Time()
+        ))
+        odom_to_ref_tuples = geometry.transform_to_tuples(
+            odom_to_ref_ros.transform)
         return geometry.tuples_to_pose(odom_to_ref_tuples)
 
     def move_end_effector_pose(self, pose, ref_frame_id=None):
@@ -615,24 +709,19 @@ class JointGroup(robot.Item):
             odom_to_hand = geometry.multiply_tuples(odom_to_ref, ref_to_hand)
             odom_to_hand_poses.append(geometry.tuples_to_pose(odom_to_hand))
 
-        req = self._generate_planning_request(PlanWithHandGoals)
+        req = self._generate_planning_request(PlanWithHandGoals.Request)
         req.origin_to_hand_goals = odom_to_hand_poses
         req.ref_frame_id = self._end_effector_frame
 
-        service_name = self._setting['plan_with_hand_goals_service']
-        plan_client = self._node.create_client(
-            PlanWithHandGoals, service_name)
-        while not plan_client.wait_for_service(timeout_sec=1.0):
-            self._node.get_logger().info(
-                f'{service_name} service not available, waiting again...')
-        res_future = plan_client.call_async(req)
+        req = self._set_constraint_tsrs(req)
 
-        res_future.add_done_callback(self._done_callback)
-        self._event.wait()
-        res = res_future.result()
-        self._event.clear()
+        service_name = self._setting['plan_with_hand_goals_service']
+        plan_service = self._node.create_client(
+            PlanWithHandGoals, service_name)
+        future = plan_service.call_async(req)
+        res = utils.wait_until_complete(self._node, future)
         if res.error_code.val != MoveItErrorCodes.SUCCESS:
-            msg = "Fail to plan move_endpoint"
+            msg = "Fail to plan move_endpoint(" + str(res.error_code.val) + ")"
             raise exceptions.MotionPlanningError(msg, res.error_code)
         res.base_solution.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(res.solution,
@@ -666,7 +755,7 @@ class JointGroup(robot.Item):
             else:
                 end_effector_frame = ref_frame_id
 
-        req = self._generate_planning_request(PlanWithHandLine)
+        req = self._generate_planning_request(PlanWithHandLine.Request)
         req.axis.x = float(axis[0])
         req.axis.y = float(axis[1])
         req.axis.z = float(axis[2])
@@ -675,17 +764,10 @@ class JointGroup(robot.Item):
         req.goal_value = distance
 
         service_name = self._setting['plan_with_hand_line_service']
-        plan_client = self._node.create_client(
-            PlanWithHandLine, service_name)
-        while not plan_client.wait_for_service(timeout_sec=1.0):
-            self._node.get_logger().info(
-                f'{service_name} service not available, waiting again...')
-        res_future = plan_client.call_async(req)
-
-        res_future.add_done_callback(self._done_callback)
-        self._event.wait()
-        res = res_future.result()
-        self._event.clear()
+        plan_service = self._node.create_client(PlanWithHandLine, service_name)
+        future = plan_service.call_async(req)
+        rclpy.spin_until_future_complete(self._node, future)
+        res = future.result()
         if res.error_code.val != MoveItErrorCodes.SUCCESS:
             msg = "Fail to plan move_hand_line"
             raise exceptions.MotionPlanningError(msg, res.error_code)
@@ -741,22 +823,16 @@ class JointGroup(robot.Item):
         goal_tsr.min_bounds = [0.0, 0.0, 0.0, 0.0, 0.0, angle]
         goal_tsr.max_bounds = [0.0, 0.0, 0.0, 0.0, 0.0, angle]
 
-        req = self._generate_planning_request(PlanWithTsrConstraints)
+        req = self._generate_planning_request(PlanWithTsrConstraints.Request)
         req.constraint_tsrs = [rotation_tsr]
         req.goal_tsrs = [goal_tsr]
 
         service_name = self._setting['plan_with_constraints_service']
-        plan_client = self._node.create_client(
+        plan_service = self._node.create_client(
             PlanWithTsrConstraints, service_name)
-        while not plan_client.wait_for_service(timeout_sec=1.0):
-            self._node.get_logger().info(
-                f'{service_name} service not available, waiting again...')
-        res_future = plan_client.call_async(req)
-
-        res_future.add_done_callback(self._done_callback)
-        self._event.wait()
-        res = res_future.result()
-        self._event.clear()
+        future = plan_service.call_async(req)
+        rclpy.spin_until_future_complete(self._node, future)
+        res = future.result()
         if res.error_code.val != MoveItErrorCodes.SUCCESS:
             msg = "Fail to plan"
             raise exceptions.MotionPlanningError(msg, res.error_code)
@@ -767,8 +843,9 @@ class JointGroup(robot.Item):
 
     def _plan_cartesian_path(self, origin_to_pose1, origin_to_pose2,
                              odom_to_robot_pose,
-                             initial_joint_state, collision_env):
-        req = self._generate_planning_request(PlanWithTsrConstraints)
+                             initial_joint_state,
+                             collision_env):
+        req = self._generate_planning_request(PlanWithTsrConstraints.Request)
         req.origin_to_basejoint = odom_to_robot_pose
         req.initial_joint_state = initial_joint_state
         if collision_env is not None:
@@ -786,37 +863,121 @@ class JointGroup(robot.Item):
             origin_to_pose1, pose1_to_axis)
         tsr_to_pose1 = _invert_pose(pose1_to_axis)
 
+        if _DEBUG:
+            print("AXIS     ", move_axis)
+            print("DISTANCE ", distance)
+            print("ORIGIN   ", origin_to_pose1)
+            print("CALCUD   ", geometry.multiply_tuples(
+                origin_to_tsr, tsr_to_pose1))
+
+            margin = 0.1
+            marker_pose = geometry.multiply_tuples(origin_to_tsr,
+                                                   geometry.pose(
+                                                       x=distance / 2.0))
+            marker = Marker()
+            marker.header.frame_id = 'odom'
+            marker.header.stamp = self._node.get_clock().now().to_msg()
+            marker.ns = 'tsr'
+            marker.id = 0
+            marker.type = Marker.CUBE
+            marker.action = Marker.ADD
+            marker.pose.position.x = marker_pose[0][0]
+            marker.pose.position.y = marker_pose[0][1]
+            marker.pose.position.z = marker_pose[0][2]
+            marker.pose.orientation.x = marker_pose[1][0]
+            marker.pose.orientation.y = marker_pose[1][1]
+            marker.pose.orientation.z = marker_pose[1][2]
+            marker.pose.orientation.w = marker_pose[1][3]
+            marker.scale.x = distance
+            marker.scale.y = margin
+            marker.scale.z = margin
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.0
+            marker.color.a = 0.5
+
+            marker.lifetime = rclpy.duration.Duration(seconds=60.0).to_msg()
+            msg = MarkerArray(markers=[marker])
+            self._vis_pub.publish(msg)
+
+            t = TransformStamped()
+            t.header.stamp = self._node.get_clock().now().to_msg()
+            t.header.frame_id = "odom"
+            t.child_frame_id = "pose1"
+            t.transform.translation.x = origin_to_pose1[0][0]
+            t.transform.translation.y = origin_to_pose1[0][1]
+            t.transform.translation.z = origin_to_pose1[0][2]
+            t.transform.rotation.x = origin_to_pose1[1][0]
+            t.transform.rotation.y = origin_to_pose1[1][1]
+            t.transform.rotation.z = origin_to_pose1[1][2]
+            t.transform.rotation.w = origin_to_pose1[1][3]
+            self._tf2_pub.sendTransform(t)
+
+            t = TransformStamped()
+            t.header.stamp = self._node.get_clock().now().to_msg()
+            t.header.frame_id = "pose1"
+            t.child_frame_id = "direction"
+            t.transform.translation.x = pose1_to_axis[0][0]
+            t.transform.translation.y = pose1_to_axis[0][1]
+            t.transform.translation.z = pose1_to_axis[0][2]
+            t.transform.rotation.x = pose1_to_axis[1][0]
+            t.transform.rotation.y = pose1_to_axis[1][1]
+            t.transform.rotation.z = pose1_to_axis[1][2]
+            t.transform.rotation.w = pose1_to_axis[1][3]
+            self._tf2_pub.sendTransform(t)
+
+            t = TransformStamped()
+            t.header.stamp = self._node.get_clock().now().to_msg()
+            t.header.frame_id = "odom"
+            t.child_frame_id = "pose2"
+            t.transform.translation.x = origin_to_pose2[0][0]
+            t.transform.translation.y = origin_to_pose2[0][1]
+            t.transform.translation.z = origin_to_pose2[0][2]
+            t.transform.rotation.x = origin_to_pose2[1][0]
+            t.transform.rotation.y = origin_to_pose2[1][1]
+            t.transform.rotation.z = origin_to_pose2[1][2]
+            t.transform.rotation.w = origin_to_pose2[1][3]
+            self._tf2_pub.sendTransform(t)
+
+            t = TransformStamped()
+            t.header.stamp = self._node.get_clock().now().to_msg()
+            t.header.frame_id = "odom"
+            t.child_frame_id = "tsr"
+            t.transform.translation.x = origin_to_tsr[0][0]
+            t.transform.translation.y = origin_to_tsr[0][1]
+            t.transform.translation.z = origin_to_tsr[0][2]
+            t.transform.rotation.x = origin_to_tsr[1][0]
+            t.transform.rotation.y = origin_to_tsr[1][1]
+            t.transform.rotation.z = origin_to_tsr[1][2]
+            t.transform.rotation.w = origin_to_tsr[1][3]
+            self._tf2_pub.sendTransform(t)
+
         # Goal constraint
         tsr_g = TaskSpaceRegion()
-        tsr_g.end_frame_id = self.end_effector_frame
+        tsr_g.end_frame_id = bytes(self.end_effector_frame)
         tsr_g.origin_to_tsr = geometry.tuples_to_pose(origin_to_pose2)
         tsr_g.tsr_to_end = geometry.tuples_to_pose(geometry.pose())
-        tsr_g.min_bounds = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        tsr_g.max_bounds = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        tsr_g.min_bounds = [0, 0, 0, 0, 0, 0]
+        tsr_g.max_bounds = [0, 0, 0, 0, 0, 0]
 
         # Line constraint
         tsr_c = TaskSpaceRegion()
-        tsr_c.end_frame_id = self.end_effector_frame
+        tsr_c.end_frame_id = bytes(self.end_effector_frame)
         tsr_c.origin_to_tsr = geometry.tuples_to_pose(origin_to_tsr)
         tsr_c.tsr_to_end = geometry.tuples_to_pose(tsr_to_pose1)
-        tsr_c.min_bounds = [0.0, 0.0, 0.0, -math.pi, -math.pi, -math.pi]
-        tsr_c.max_bounds = [distance, 0.0, 0.0, math.pi, math.pi, math.pi]
+        tsr_c.min_bounds = [0, 0, 0, -math.pi, -math.pi, -math.pi]
+        tsr_c.max_bounds = [distance, 0, 0, math.pi, math.pi, math.pi]
 
         req.goal_tsrs = [tsr_g]
         req.constraint_tsrs = [tsr_c]
 
         service_name = self._setting['plan_with_constraints_service']
-        plan_client = self._node.create_client(
-            PlanWithTsrConstraints, service_name)
-        while not plan_client.wait_for_service(timeout_sec=1.0):
-            self._node.get_logger().info(
-                f'{service_name} service not available, waiting again...')
-        res_future = plan_client.call_async(req)
 
-        res_future.add_done_callback(self._done_callback)
-        self._event.wait()
-        res = res_future.result()
-        self._event.clear()
+        plan_service = self._node.create_client(
+            PlanWithTsrConstraints, service_name)
+        future = plan_service.call_async(req)
+        rclpy.spin_until_future_complete(self._node, future)
+        res = future.result()
         if res.error_code.val != MoveItErrorCodes.SUCCESS:
             msg = "Fail to plan"
             raise exceptions.MotionPlanningError(msg, res.error_code)
@@ -874,40 +1035,89 @@ class JointGroup(robot.Item):
             odom_to_robot_pose.orientation.z = final_transform.rotation.z
             odom_to_robot_pose.orientation.w = final_transform.rotation.w
             initial_joint_state = plan.joint_state_after_planning
-            # collision_env = plan.environment_after_planning
 
         base_traj.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(arm_traj, base_traj)
         self._execute_trajectory(constrained_traj)
 
-    def _generate_planning_request(self, service_type):
+    def gaze_point(self, point=geometry.vector3(), ref_frame_id=None):
+        """Point the rgbd sensor at given place.
+
+        Args:
+            point (Vector3): A position to point.
+            ref_frame_id (str): A base frame of the point.
+                The default is the robot frame(```base_footprint``).
+        Returns:
+            None
+        Notes:
+            If the calculated angle is over the limit, the angle is rounded.
+        """
+        if np.isinf(point).any() or np.isnan(point).any():
+            raise ValueError("The point includes inf or nan.")
+        if ref_frame_id is None:
+            ref_frame_id = settings.get_frame('base')
+        origin_to_ref_ros_pose = self._lookup_odom_to_ref(ref_frame_id)
+        origin_to_ref = geometry.pose_to_tuples(origin_to_ref_ros_pose)
+
+        origin_to_base_ros_pose = self._lookup_odom_to_ref(
+            settings.get_frame('base'))
+        origin_to_base = geometry.pose_to_tuples(origin_to_base_ros_pose)
+        base_to_origin = _invert_pose(origin_to_base)
+
+        ref_to_point = geometry.Pose(point, geometry.quaternion())
+
+        base_to_ref = geometry.multiply_tuples(base_to_origin, origin_to_ref)
+        base_to_point = geometry.multiply_tuples(base_to_ref, ref_to_point)
+
+        result = self._kinematics_interface.calculate_gazing_angles(
+            list(base_to_point.pos), str(self._setting['rgbd_sensor_frame']))
+        if len(result) == 0:
+            raise RuntimeError("Cannot gaze the given point.")
+        self.move_to_joint_positions(result)
+
+    def _generate_planning_request(self, request_type):
         """Generate a planning request and assign common parameters to it.
 
         Args:
-            service_type (Types):
+            request_type (Types):
                 A type of "planning service request".
                 The following are available types.
-                    - tmc_planning_msgs.srv.PlanWithHandGoals.Request
-                    - tmc_planning_msgs.srv.PlanWithHandLine.Request
-                    - tmc_planning_msgs.srv.PlanWithJointGoals.Request
-                    - tmc_planning_msgs.srv.PlanWithTsrConstraints.Request
+                    - tmc_planning_msgs.srv.PlanWithHandGoalsRequest
+                    - tmc_planning_msgs.srv.PlanWithHandLineRequest
+                    - tmc_planning_msgs.srv.PlanWithJointGoalsRequest
+                    - tmc_planning_msgs.srv.PlanWithTsrConstraintsRequest
 
         Retruns:
             tmc_planning_msgs.srv.PlanWithXXX:
                 An instance with common parameters.
         """
-        request = service_type.Request()
+        request = request_type()
         request.origin_to_basejoint = self._lookup_odom_to_ref(
             settings.get_frame('base'))
         request.initial_joint_state = self._get_joint_state()
-        request.timeout = Duration(seconds=self._planning_timeout).to_msg()
+        request.timeout = rclpy.duration.Duration(
+            seconds=self._planning_timeout).to_msg()
         request.max_iteration = _PLANNING_MAX_ITERATION
         if self._collision_world is not None:
             snapshot = self._collision_world.snapshot(
                 settings.get_frame('odom'))
             request.environment_before_planning = snapshot
 
-        if service_type is PlanWithJointGoals:
+            request.attached_objects = self._collision_world.attached_objects
+
+            # Request.environment_before_planning is not included in Attached_objects
+            # Since the operation plan fails, add it here
+            for attached_object in self._collision_world.attached_objects:
+                already_known_object_flag = False
+                for known_object in request.environment_before_planning.collision_objects:
+                    if known_object.id == attached_object.object.id:
+                        already_known_object_flag = True
+                        break
+
+                if not already_known_object_flag:
+                    request.environment_before_planning.collision_objects.append(attached_object.object)
+
+        if request_type is PlanWithJointGoals.Request:
             request.base_movement_type.val = BaseMovementType.NONE
             return request
         else:
@@ -966,9 +1176,6 @@ class JointGroup(robot.Item):
                     odom_base_trajectory.points[0].positions
             filtered_merged_traj = trajectory.hsr_timeopt_filter(
                 merged_traj, start_state, self._node)
-        # if filtered_merged_traj is None:
-        #     filtered_merged_traj = trajectory.constraint_filter(
-        #         merged_traj, self._node)
         return filtered_merged_traj
 
     def _execute_trajectory(self, joint_traj):
@@ -984,14 +1191,14 @@ class JointGroup(robot.Item):
             None
         """
         clients = []
-        # if self._impedance_client.config is not None:
-        #     clients.append(self._impedance_client)
-        # else:
-        for client in self._position_control_clients:
-            for joint in joint_traj.joint_names:
-                if joint in client.joint_names:
-                    clients.append(client)
-                    break
+        if False:  # self._impedance_client.config is not None:
+            clients.append(self._impedance_client)
+        else:
+            for client in self._position_control_clients:
+                for joint in joint_traj.joint_names:
+                    if joint in client.joint_names:
+                        clients.append(client)
+                        break
         joint_states = self._get_joint_state()
 
         for client in clients:
@@ -999,4 +1206,4 @@ class JointGroup(robot.Item):
                                       joint_states)
             client.submit(traj)
 
-        trajectory.wait_controllers(clients, self._node)
+        trajectory.wait_controllers(self._node, clients)

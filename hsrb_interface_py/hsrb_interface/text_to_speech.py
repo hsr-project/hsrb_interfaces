@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 '''
 Copyright (c) 2024 TOYOTA MOTOR CORPORATION
 All rights reserved.
@@ -27,41 +26,66 @@ OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGE.
 '''
 # vim: fileencoding=utf-8
-"""Unittest for hsrb_interface_py.utils module."""
+"""Text-to-speech interface"""
 
-import _testing as testing
-from hsrb_interface import Robot
-from hsrb_interface import utils
-from nose.tools import eq_
-import rclpy
-from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+from tmc_voice_msgs.msg import Voice
 
-from sensor_msgs.msg import JointState
+from . import exceptions
+from . import robot
+from . import settings
 
 
-class UtilsTestCase(testing.RosMockTestCase):
+class TextToSpeech(robot.Item):
+    """Abstract interface for text-to-speech service
 
-    def test_caching_subscriber(self):
-        rclpy.init()
-        robot = Robot()  # noqa: F841
-        qos_profile = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=1)
-        """Test CachingSubscriber class"""
-        sub = utils.CachingSubscriber(
-            "/joint_states",
-            JointState)
-        self.subscriber_mock.assert_called_with(
-            JointState,
-            "/joint_states",
-            sub._callback,
-            qos_profile)
+    Examples:
 
+        .. sourcecode:: python
 
-def test_iterate():
-    """Test iterate function."""
-    data = list(utils.iterate(lambda: 2, 5))
-    eq_(len(data), 5)
-    for datum in data:
-        eq_(2, datum)
+            with Robot() as robot:
+                tts = robot.get("default", Items.TEXT_TO_SPEECH)
+                tts.language = tts.JAPANESE
+                tts.say(u"Hello, World!")
+    """
+
+    JAPANESE = Voice.JAPANESE
+    ENGLISH = Voice.ENGLISH
+
+    def __init__(self, name):
+        """Initialize an instance
+
+        Args:
+            name (str): A resource name
+        """
+        super(TextToSpeech, self).__init__()
+        self._setting = settings.get_entry('text_to_speech', name)
+        topic = self._setting['topic']
+        self._pub = self._node.create_publisher(Voice, topic, 0)
+        self._language = TextToSpeech.JAPANESE
+
+    @property
+    def language(self):
+        """(int): Language of speech"""
+        return self._language
+
+    @language.setter
+    def language(self, value):
+        if value not in (Voice.JAPANESE, Voice.ENGLISH):
+            msg = "Language code {0} is not supported".format(value)
+            raise exceptions.InvalidLanguageError(msg)
+        self._language = value
+
+    def say(self, text):
+        """Speak a given text
+
+        Args:
+            text (str): A text to be converted to voice sound (UTF-8)
+        Returns:
+            None
+        """
+        msg = Voice()
+        msg.interrupting = False
+        msg.queueing = False
+        msg.language = self._language
+        msg.sentence = text
+        self._pub.publish(msg)

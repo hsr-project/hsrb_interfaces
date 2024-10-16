@@ -1,68 +1,61 @@
+'''
+Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+All rights reserved.
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the disclaimer
+below) provided that the following conditions are met:
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+* Neither the name of the copyright holder nor the names of its contributors may be used
+  to endorse or promote products derived from this software without specific
+  prior written permission.
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
+LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+'''
 # vim: fileencoding=utf-8
-# Copyright (c) 2023 TOYOTA MOTOR CORPORATION
-# All rights reserved.
+"""This module provides classes and functions to manage connections to robots.
 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted (subject to the limitations in the disclaimer
-# below) provided that the following conditions are met:
-
-# * Redistributions of source code must retain the above copyright notice, this
-#   list of conditions and the following disclaimer.
-
-# * Redistributions in binary form must reproduce the above copyright notice,
-#   this list of conditions and the following disclaimer in the documentation
-#   and/or other materials provided with the distribution.
-
-# * Neither the name of the copyright holder nor the names of its contributors may be used
-#   to endorse or promote products derived from this software without specific
-#   prior written permission.
-
-# NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
-# LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-# GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
-# OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
-# DAMAGE.
-
-"""This module provides classes and functions to manage connections to robots."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+"""
 
 import enum
 import importlib
 import sys
-import threading
 import warnings
 import weakref
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile
 import tf2_ros
 
 from . import exceptions
 from . import settings
 
 
-class Item(object):
+class Item(rclpy.node.Node):
     """A base class to be under resource management.
 
     Raises:
-        hsrb_interface_py.exceptions.RobotConnectionError:
+        hsrb_interface.exceptions.RobotConnectionError:
             Not connected to a robot.
     """
 
     def __init__(self):
-        """See class docstring."""
         self._node = Robot._connection
+        """See class docstring."""
         if not Robot._connecting():
             raise exceptions.RobotConnectionError("No robot connection")
 
@@ -154,22 +147,22 @@ class _ConnectionManager(Node):
 
     def __init__(self, use_tf_client=False):
         """See class docstring."""
+        context = rclpy.utilities.get_default_context()
+        if not context.ok():
+            rclpy.init()
         super().__init__('hsrb_interface_py')
         if use_tf_client:
             self._tf2_buffer = tf2_ros.BufferClient('/tf2_buffer_server')
         else:
+            qos_profile = QoSProfile(depth=1)
             self._tf2_buffer = tf2_ros.Buffer()
             self._tf2_listener = tf2_ros.TransformListener(
-                self._tf2_buffer, self)
+                self._tf2_buffer, self, qos=qos_profile)
         self._registry = {}
-        self._stop_flag = True
-        self._thread = threading.Thread(target=self._spin_loop, daemon=True)
-        self._thread.start()
 
     def __del__(self):
         self._tf2_listener = None
         self._tf2_buffer = None
-        self._thread.join()
 
     @property
     def tf2_buffer(self):
@@ -206,7 +199,7 @@ class _ConnectionManager(Node):
             Item: An instance with a specified name
 
         Raises:
-            hsrb_interface_py.exceptions.ResourceNotFoundError
+            hsrb_interface.exceptions.ResourceNotFoundError
         """
         if typ is None:
             section, config = settings.get_entry_by_name(name)
@@ -223,15 +216,11 @@ class _ConnectionManager(Node):
             config = settings.get_entry(typ.value, name)
             module_name, class_name = config["class"]
             module = importlib.import_module(".{0}".format(module_name),
-                                             "hsrb_interface_py")
+                                             "hsrb_interface")
             cls = getattr(module, class_name)
             obj = cls(name)
             self._registry[key] = obj
             return weakref.proxy(obj)
-
-    def _spin_loop(self):
-        while True:
-            rclpy.spin_once(self)
 
 
 def _get_tf2_buffer():
@@ -257,7 +246,7 @@ class Robot(object):
     Example:
         .. sourcecode:: python
 
-           from hsrb_interface_py import Robot, ItemTypes
+           from hsrb_interface import Robot, ItemTypes
                 with Robot() as robot:
                     print(robot.list())
                     whole_body = robot.get("whole_body")
@@ -307,10 +296,6 @@ class Robot(object):
         else:
             self._conn = Robot._connection
 
-    @property
-    def node(self):
-        return Robot._connection
-
     def close(self):
         """Shutdown immediately."""
         self.__exit__(None, None, None)
@@ -321,9 +306,9 @@ class Robot(object):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """A part of ContextManager interface."""
-        self.node.destroy_node()
-        Robot._connection = None
+        self._conn.destroy_node()
         self._conn = None
+        Robot._connection = None
 
     def ok(self):
         """Check whether this handle is valid or not.
@@ -367,7 +352,7 @@ class Robot(object):
             Item: An instance with a specified name.
 
         Raises:
-            hsrb_interface_py.exceptions.ResourceNotFoundError:
+            hsrb_interface.exceptions.ResourceNotFoundError:
                 A resource that named as `name` is not found.
 
         Warnings:
@@ -392,7 +377,7 @@ class Robot(object):
             Item: An instance with a specified name.
 
         Raises:
-            hsrb_interface_py.exceptions.ResourceNotFoundError:
+            hsrb_interface.exceptions.ResourceNotFoundError:
                 A resource that named as `name` is not found.
 
         Warnings:
