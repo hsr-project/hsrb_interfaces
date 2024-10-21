@@ -90,7 +90,7 @@ class MobileBase(robot.Item):
             self._node, NavigateToPose, navigation_action_name)
         self._action_client.wait_for_server(_ACTION_WAIT_TIMEOUT)
         self._follow_client = trajectory.TrajectoryController(
-            self._setting['follow_trajectory_action'], '/base_coordinates')
+            self._setting['follow_trajectory_action'], 'base_coordinates')
         self._current_client = None
 
     def go_pose(self, pose=geometry.pose(), timeout=0.0, ref_frame_id=None):
@@ -369,12 +369,12 @@ class MobileBase(robot.Item):
 
         transformed_trajectory = trajectory.transform_base_trajectory(
             input_trajectory, self._tf2_buffer, _TF_TIMEOUT,
-            self._follow_client.joint_names)
+            self._follow_client.joint_names, self._node)
 
         if num_times == 0:
             # TODO(Keisuke Takeshita): Use hsr_timeopt_filter
             base_trajectory = trajectory.timeopt_filter(
-                transformed_trajectory)
+                transformed_trajectory, self._node)
             base_trajectory.header.stamp = self._node.get_clock().now().to_msg()
         else:
             base_trajectory = transformed_trajectory
@@ -449,7 +449,7 @@ class MobileBase(robot.Item):
                 state = self._send_goal_future.result().status
                 return state == action_msgs.GoalStatus.STATUS_SUCCEEDED
             elif self._current_client is self._follow_client:
-                state = self._current_client.get_state(self._node)
+                state = self._current_client.get_state()
                 return state == action_msgs.GoalStatus.STATUS_SUCCEEDED
 
     def get_state(self):

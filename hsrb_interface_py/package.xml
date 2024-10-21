@@ -39,6 +39,7 @@
   <exec_depend>tmc_voice_msgs</exec_depend>
   <exec_depend>ipython3</exec_depend>
   <exec_depend>urdfdom_py</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
 
   <test_depend>python3-mock</test_depend>
   <test_depend>hsrb_description</test_depend>
