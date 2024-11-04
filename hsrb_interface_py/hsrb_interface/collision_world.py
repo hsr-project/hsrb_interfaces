@@ -123,7 +123,6 @@ class CollisionWorld(robot.Item):
             collision_obj.primitives = [shape]
             collision_obj.primitive_poses = [geometry.tuples_to_pose(pose)]
         collision_obj.header.frame_id = frame_id
-        collision_obj.header.stamp = self._node.get_clock().now().to_msg()
         return collision_obj
 
     def _wait_object_id_used(self, id, timeout=1.0):
