@@ -37,6 +37,7 @@ from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 import rclpy
 from rclpy.action import ActionClient
+from sensor_msgs.msg import JointState
 import tf_transformations
 from trajectory_msgs.msg import JointTrajectory
 from trajectory_msgs.msg import MultiDOFJointTrajectory
@@ -85,6 +86,12 @@ class MobileBase(robot.Item):
 
         self._tf2_buffer = robot._get_tf2_buffer()
         navigation_action_name = self._setting['navigation_action']
+
+        self._joint_state_sub = utils.CachingSubscriber(
+            self._setting["joint_states_topic"],
+            JointState,
+            default=JointState())
+        self._joint_state_sub.wait_for_message(20.0)
 
         self._action_client = ActionClient(
             self._node, NavigateToPose, navigation_action_name)
@@ -372,10 +379,10 @@ class MobileBase(robot.Item):
             self._follow_client.joint_names, self._node)
 
         if num_times == 0:
-            # TODO(Keisuke Takeshita): Use hsr_timeopt_filter
-            base_trajectory = trajectory.timeopt_filter(
-                transformed_trajectory, self._node)
-            base_trajectory.header.stamp = self._node.get_clock().now().to_msg()
+            start_state = self._joint_state_sub.data
+            start_state.name += self._follow_client.joint_names
+            start_state.position += transformed_trajectory.points[0].positions
+            base_trajectory = trajectory.hsr_timeopt_filter(transformed_trajectory, start_state, self._node)
         else:
             base_trajectory = transformed_trajectory
             for index in range(num_times):

@@ -122,6 +122,7 @@ _HSRB_SETTINGS = """
             "follow_trajectory_action": "/omni_base_controller",
             "pose_topic": "/global_pose",
             "goal_topic": "/base_goal",
+            "joint_states_topic": "/joint_states",
             "timeout": 1.0
         }
     },

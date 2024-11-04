@@ -28,6 +28,7 @@ DAMAGE.
 # vim: fileencoding=utf-8
 """This module classes and functions that manipulate joint trajectories"""
 
+import asyncio
 import copy
 from itertools import repeat
 import time
@@ -247,13 +248,15 @@ def transform_base_trajectory(
         trajectory_msgs.msg.JointTrajectory:
             A base trajectory based on ``odom`` frame.
     """
-    now = rclpy.time.Time()
-    dur = rclpy.duration.Duration(seconds=tf_timeout)
-    odom_to_frame_transform = tf2_buffer.lookup_transform(
-        _BASE_TRAJECTORY_ORIGIN,
-        base_traj.header.frame_id,
-        now,
-        dur)
+    stamp = rclpy.time.Time()
+    odom_to_frame_future = tf2_buffer.wait_for_transform_async(
+        target_frame=_BASE_TRAJECTORY_ORIGIN,
+        source_frame=base_traj.header.frame_id,
+        time=stamp)
+    rclpy.spin_until_future_complete(node, odom_to_frame_future, timeout_sec=tf_timeout)
+    odom_to_frame_transform = asyncio.run(tf2_buffer.lookup_transform_async(
+        _BASE_TRAJECTORY_ORIGIN, base_traj.header.frame_id, stamp))
+
     odom_to_frame = geometry.transform_to_tuples(
         odom_to_frame_transform.transform)
 
