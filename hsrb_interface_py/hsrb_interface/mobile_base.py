@@ -53,7 +53,7 @@ from . import utils
 # Timeout to receve enough tf transform [sec]
 _TF_TIMEOUT = 5.0
 
-_ACTION_WAIT_TIMEOUT = 30.0
+_ACTION_WAIT_TIMEOUT = 3.0
 
 
 def _validate_timeout(timeout):
@@ -91,7 +91,7 @@ class MobileBase(robot.Item):
             self._setting["joint_states_topic"],
             JointState,
             default=JointState())
-        self._joint_state_sub.wait_for_message(20.0)
+        self._joint_state_sub.wait_for_message(3.0)
 
         self._action_client = ActionClient(
             self._node, NavigateToPose, navigation_action_name)

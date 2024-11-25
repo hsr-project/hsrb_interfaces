@@ -50,7 +50,7 @@ from . import settings
 from . import utils
 
 # Timeout to wait for message [sec]
-_WAIT_TOPIC_TIMEOUT = 20.0
+_WAIT_TOPIC_TIMEOUT = 3.0
 
 
 class CollisionWorld(robot.Item):
