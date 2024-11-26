@@ -65,7 +65,7 @@ _HSRB_SETTINGS = """
             "whole_timeopt_filter_service": "/timeopt_filter_node/filter_trajectory",
             "caster_joint": "base_roll_joint",
             "filter_timeout": 30.0,
-            "action_timeout": 30.0,
+            "action_timeout": 3.0,
             "watch_rate": 30.0
     },
     "joint_group": {

@@ -234,7 +234,7 @@ class JointGroup(robot.Item):
             joint_state_topic,
             JointState,
             default=JointState())
-        self._joint_state_sub.wait_for_message(20.0)
+        self._joint_state_sub.wait_for_message(3.0)
         self._tf2_buffer = robot._get_tf2_buffer()
         self._end_effector_frames = self._setting['end_effector_frames']
         self._end_effector_frame = self._end_effector_frames[0]

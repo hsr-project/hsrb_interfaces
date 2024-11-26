@@ -78,7 +78,7 @@ class CachingSubscriber(robot.Item):
             None
         """
         timeout_sec = timeout
-        sleep_time = 0.25
+        sleep_time = 0.01
         if timeout_sec is None:
             timeout_sec = float('inf')
         self.message_count = 0
