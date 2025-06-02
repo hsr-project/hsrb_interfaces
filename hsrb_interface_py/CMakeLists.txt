@@ -3,7 +3,7 @@ project(hsrb_interface_py)
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
-find_package(tmc_robot_kinematics_model REQUIRED)
+find_package(hsr_kinematics REQUIRED)
 find_package(Boost REQUIRED COMPONENTS python)
 find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -11,11 +11,13 @@ find_package(PythonLibs REQUIRED)
 
 set(_package_namespace hsrb_interface)
 add_library(${PROJECT_NAME}_extension SHARED
-            ${_package_namespace}/ext/head_kinematics.cpp
             ${_package_namespace}/ext/kinematics.cpp)
-target_include_directories(${PROJECT_NAME}_extension
-  PUBLIC include ${rclcpp_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${PYTHON_INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME}_extension ${rclcpp_LIBRARIES} ${Boost_LIBRARIES})
+target_include_directories(
+  ${PROJECT_NAME}_extension
+  PUBLIC include ${rclcpp_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS}
+         ${EIGEN3_INCLUDE_DIRS} ${PYTHON_INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME}_extension ${rclcpp_LIBRARIES}
+                      ${Boost_LIBRARIES})
 
 set_target_properties(
   ${PROJECT_NAME}_extension
@@ -23,7 +25,8 @@ set_target_properties(
              LIBRARY_OUTPUT_DIRECTORY lib/${_package_namespace}
              PREFIX "")
 
-ament_target_dependencies(${PROJECT_NAME}_extension rclcpp tmc_robot_kinematics_model Eigen3)
+ament_target_dependencies(${PROJECT_NAME}_extension hsr_kinematics Boost rclcpp
+                          Eigen3)
 
 ament_python_install_package(hsrb_interface)
 
@@ -46,6 +49,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_utils test/test_utils.py)
   ament_add_pytest_test(test_whole_body test/test_whole_body.py)
   ament_add_pytest_test(test_collision_world test/test_collision_world.py)
+  
 endif()
 
 ament_export_include_directories(include)

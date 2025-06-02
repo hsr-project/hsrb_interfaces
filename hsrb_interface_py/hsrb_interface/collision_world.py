@@ -1,49 +1,61 @@
-'''
-Copyright (c) 2024 TOYOTA MOTOR CORPORATION
-All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted (subject to the limitations in the disclaimer
-below) provided that the following conditions are met:
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-* Neither the name of the copyright holder nor the names of its contributors may be used
-  to endorse or promote products derived from this software without specific
-  prior written permission.
-NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
-LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
-OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
-DAMAGE.
-'''
+# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# All rights reserved.
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted (subject to the limitations in the disclaimer
+# below) provided that the following conditions are met:
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+# * Neither the name of the copyright holder nor the names of its contributors may be used
+#   to endorse or promote products derived from this software without specific
+#   prior written permission.
+# NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
+# LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+# GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+# OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+# DAMAGE.
 # vim: fileencoding=utf-8
 """Collision checking interface."""
 
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
+import os
 import time
 
+from geometry_msgs.msg import Point
 from hsrb_interface import geometry
 
 from moveit_msgs.msg import AttachedCollisionObject
 from moveit_msgs.msg import CollisionObject
 from moveit_msgs.msg import PlanningSceneWorld
 from moveit_msgs.msg import RobotState
+import numpy as np
 from rcl_interfaces.msg import Parameter
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import SetParameters
 
 import rclpy
 
-from shape_msgs.msg import SolidPrimitive
+from shape_msgs.msg import (
+    Mesh,
+    MeshTriangle,
+    SolidPrimitive,
+)
 from std_msgs.msg import String
+from stl import mesh
 
 from . import robot
 from . import settings
@@ -112,18 +124,50 @@ class CollisionWorld(robot.Item):
         known_ids = [x.object.id for x in self._attach_info_sub.data.attached_collision_objects]
         return object_id in known_ids
 
-    def _create_collision_object(self, shape, pose, name, frame_id):
+    def _create_collision_object(self, obj, pose, name, frame_id):
         collision_obj = CollisionObject()
         collision_obj.operation = CollisionObject.ADD
         collision_obj.id = name
+
+        objects = []
+        poses = []
         if isinstance(pose, list):
-            collision_obj.primitives = [shape for _ in pose]
-            collision_obj.primitive_poses = [geometry.tuples_to_pose(pos) for pos in pose]
+            objects = [obj for _ in pose]
+            poses = [geometry.tuples_to_pose(pos) for pos in pose]
         else:
-            collision_obj.primitives = [shape]
-            collision_obj.primitive_poses = [geometry.tuples_to_pose(pose)]
+            objects = [obj]
+            poses = [geometry.tuples_to_pose(pose)]
+
+        if isinstance(obj, Mesh):
+            collision_obj.meshes = objects
+            collision_obj.mesh_poses = poses
+        else:
+            collision_obj.primitives = objects
+            collision_obj.primitive_poses = poses
+
         collision_obj.header.frame_id = frame_id
+        collision_obj.header.stamp = self._node.get_clock().now().to_msg()
         return collision_obj
+
+    def _create_mesh(self, filename):
+        if not os.path.exists(filename):
+            raise ValueError("stl file does not exist.")
+
+        mesh_data = mesh.Mesh.from_file(filename)
+        all_vertices = np.vstack([mesh_data.v0, mesh_data.v1, mesh_data.v2])
+        vertices, indices = np.unique(all_vertices, return_inverse=True, axis=0)
+        indices = indices.reshape(3, -1).transpose()
+
+        mesh_msg = Mesh()
+        for vertex in vertices:
+            point = Point()
+            point.x, point.y, point.z = vertex.astype(np.float64)
+            mesh_msg.vertices.append(point)
+        for index in indices:
+            triangle = MeshTriangle()
+            triangle.vertex_indices = index.tolist()
+            mesh_msg.triangles.append(triangle)
+        return mesh_msg
 
     def _wait_object_id_used(self, id, timeout=1.0):
         start = self._node.get_clock().now()
@@ -165,8 +209,8 @@ class CollisionWorld(robot.Item):
                 return False
             time.sleep(0.1)
 
-    def _add_object(self, shape, pose, name, frame_id, timeout):
-        object = self._create_collision_object(shape, pose, name, frame_id)
+    def _add_object(self, obj, pose, name, frame_id, timeout):
+        object = self._create_collision_object(obj, pose, name, frame_id)
         self._object_pub.publish(object)
 
         # Wait until it is reflected
@@ -175,9 +219,9 @@ class CollisionWorld(robot.Item):
         else:
             return None
 
-    def _add_attached_object(self, shape, pose, name, frame_id, timeout):
+    def _add_attached_object(self, obj, pose, name, frame_id, timeout):
         attached_object = AttachedCollisionObject()
-        attached_object.object = self._create_collision_object(shape, pose, name, frame_id)
+        attached_object.object = self._create_collision_object(obj, pose, name, frame_id)
         attached_object.link_name = frame_id
         self._add_attaching_pub.publish(attached_object)
 
@@ -221,7 +265,7 @@ class CollisionWorld(robot.Item):
         else:
             origin_frame_id = ref_frame_id
 
-        # Change parameters
+        # Change the parameters
         client = self._node.create_client(SetParameters,
                                           self._setting['set_frame_service'])
 
@@ -238,7 +282,7 @@ class CollisionWorld(robot.Item):
         if not res.results[0].successful:
             raise RuntimeError("Cannot set frame_id")
 
-        # Subscribe to Transformed_Environment
+        # Subscribe to transformed_environment
         self._trans_env_sub.wait_for_message(_WAIT_TOPIC_TIMEOUT)
         return self._trans_env_sub.data
 
@@ -394,43 +438,60 @@ class CollisionWorld(robot.Item):
 
         return self._add_attached_object(shape, pose, name, frame_id, timeout)
 
-    # def add_mesh(self, filename, pose=geometry.pose(), frame_id='map',
-    #              name='mesh', timeout=1.0):
-    #     """Add a mesh object to the collision space.
+    def add_mesh(self, filename, pose=geometry.pose(), frame_id='map', name='mesh', timeout=1.0):
+        """Add a mesh object to the collision space.
 
-    #     Args:
-    #         filename: An URI to a STL file.
-    #             Acceptable schemes are 'http', 'package', 'file'.
+        Args:
+            filename: An URI to a STL file.
+                Acceptable scheme is 'file'.
 
-    #             Example:
+                Example:
+                    - file:///home/hoge/hoge.stl'
 
-    #                 - http://hoge/mesh.stl
-    #                 - package://your_pkg/mesh/hoge.stl
-    #                 - file:///home/hoge/huge.stl'
+            pose: A pose/poses of a new object from the frame ``frame_id`` .
+            frame_id: A reference frame of a new object.
+            name (str): A name of a new object
+            timeout (float): Wait known object list for this value [sec]
 
-    #         pose: A pose/poses of a new object from the frame ``frame_id`` .
-    #         frame_id: A reference frame of a new object.
+        Returns:
+            name (str): A name of an added object.
 
-    #     Returns:
-    #         Tuple[int, str]: ID and name of an added object.
+        Raises:
+            ValueError: A file does not exist.
+        """
+        mesh_obj = self._create_mesh(filename)
 
-    #     Raises:
-    #         IOError: A file does not exist.
-    #     """
-    #     self._known_obj_ids_sub.wait_for_message(_WAIT_TOPIC_TIMEOUT)
-    #     while self._is_object_id_used(self._object_count):
-    #         self._object_count = self._object_count - 1
-    #     # Create CollisionObject
-    #     shape = Shape()
-    #     shape.type = Shape.MESH
-    #     shape.stl_file_name = filename
-    #     mesh = self._create_collision_object(shape, pose, name, frame_id)
-    #     self._object_pub.publish(mesh)
-    #     # Wait until it is reflected
-    #     if self._wait_object_id_used(self._object_count, timeout):
-    #         return (mesh.id.object_id, mesh.id.name)
-    #     else:
-    #         return None
+        return self._add_object(mesh_obj, pose, name, frame_id, timeout)
+
+    def add_attached_mesh(self, filename, pose=geometry.pose(),
+                          frame_id='hand_palm_link', name='mesh', timeout=1.0):
+        """Add a mesh object to the collision space.
+
+        Args:
+            filename: An URI to a STL file.
+                Acceptable scheme is 'file'.
+
+                Example:
+                    - file:///home/hoge/hoge.stl'
+
+            pose: A pose/poses of a new object from the frame ``frame_id`` .
+            frame_id: A reference end effector frame of a new object.
+            name (str): A name of a new object
+            timeout (float): Wait known object list for this value [sec]
+
+        Returns:
+            name (str): A name of an added object.
+
+        Raises:
+            ValueError: A file does not exist.
+            ValueError: frame_id is not end effector frame.
+        """
+        if frame_id not in settings.get_entry('joint_group', 'whole_body')['end_effector_frames']:
+            raise ValueError("frame_id is not end effector frame.")
+
+        mesh_obj = self._create_mesh(filename)
+
+        return self._add_attached_object(mesh_obj, pose, name, frame_id, timeout)
 
     def attach(self, object_id, timeout=1.0):
         """Attach a specified object from the existing object.

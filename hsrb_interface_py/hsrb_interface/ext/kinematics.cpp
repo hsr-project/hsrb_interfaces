@@ -25,27 +25,29 @@ LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
 OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGE.
 */
+/// @brief Python wrapper for the kinematics library
+/// @brief Copyright (C) 2017 TOYOTA MOTOR CORPORATION
 #include <string>
 #include <vector>
 #include <boost/python.hpp>
-#include "head_kinematics.hpp"
+#include <hsr_kinematics/head_kinematics.hpp>
 
 namespace bp = boost::python;
 
 namespace {
-// Head YAW joint name joint name
+// Joint name for the head's yaw joint
 const char* const kHeadYawJoint = "head_pan_joint";
-// Head Pitch joint name
+// Joint name for the head's pitch joint
 const char* const kHeadPitchJoint = "head_tilt_joint";
 }  // namespace
 
 namespace hsrb_interface_plugin {
 
-/// Exercise interface, only the head joint angle calculation that turns the gaze to any coordinates
+/// Kinematics interface, only implements head joint angle calculations to direct the gaze at any given coordinate
 class KinematicsInterface {
  public:
-  /// constructor
-  /// @param[in] Robot_description robot model
+  /// Constructor
+  /// @param[in] robot_description  Robot model
   explicit KinematicsInterface(const std::string& robot_description) {
     std::vector<std::string> head_joint_names;
     head_joint_names.push_back(kHeadYawJoint);
@@ -55,11 +57,11 @@ class KinematicsInterface {
                                               head_joint_names));
   }
 
-  /// Calculate the head joint angle by seeing the given place
-  /// @param[in] baselink_to_point's robot standard, [x, y, z]
-  /// @param[in] Camera_frame target camera frame name
-  /// @return Boost :: python :: DICT Head bread and tilt angle
-  ///                             If the calculation fails, return an empty dictionary
+  /// Calculates head joint angles to look at the given location
+  /// @param[in] baselink_to_point Gaze point coordinates based on the robot's reference, [x, y, z]
+  /// @param[in] camera_frame Frame name of the camera in question
+  /// @return boost::python::dict Joint angles for head pan and tilt
+  ///                             Returns an empty dictionary if calculation fails
   bp::dict CalculateAngles(const bp::list& baselink_to_point,
                            const std::string& camera_frame) {
     if (bp::len(baselink_to_point) != 3) {
@@ -69,8 +71,8 @@ class KinematicsInterface {
         static_cast<double>(bp::extract<double>(baselink_to_point[0])),
         static_cast<double>(bp::extract<double>(baselink_to_point[1])),
         static_cast<double>(bp::extract<double>(baselink_to_point[2])));
-    // The third argument Current_Joint_state is enough in the head configuration of the HSR-B
-    // Head_Joint_state is rounded to its value when it exceeds the joint angle limit.
+    // The third argument current_joint_state is empty enough for the head configuration of HSR-B
+    // The head_joint_state is rounded to its value if joint angle limits are exceeded
     tmc_manipulation_types::JointState head_joint_state;
     if (!head_kinematics_->CalculateAngleToGazePoint(
             target, camera_frame,

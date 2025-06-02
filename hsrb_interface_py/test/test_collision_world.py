@@ -1,31 +1,34 @@
-'''
-Copyright (c) 2024 TOYOTA MOTOR CORPORATION
-All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted (subject to the limitations in the disclaimer
-below) provided that the following conditions are met:
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-* Neither the name of the copyright holder nor the names of its contributors may be used
-  to endorse or promote products derived from this software without specific
-  prior written permission.
-NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
-LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
-OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
-DAMAGE.
-'''
+# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# All rights reserved.
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted (subject to the limitations in the disclaimer
+# below) provided that the following conditions are met:
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+# * Neither the name of the copyright holder nor the names of its contributors may be used
+#   to endorse or promote products derived from this software without specific
+#   prior written permission.
+# NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
+# LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+# GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+# OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+# DAMAGE.
 """Unittest for collision_world module"""
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
 import math
 import os
 import sys
@@ -36,6 +39,7 @@ from unittest.mock import patch
 from unittest.mock import PropertyMock
 
 import _testing as testing
+from geometry_msgs.msg import Point
 import hsrb_interface
 from hsrb_interface import geometry
 
@@ -50,6 +54,7 @@ from moveit_msgs.msg import RobotState
 
 from nose.tools import eq_
 from nose.tools import raises
+import numpy as np
 
 from rcl_interfaces.msg import Parameter
 from rcl_interfaces.msg import ParameterType
@@ -58,8 +63,13 @@ from rcl_interfaces.srv import SetParameters
 
 import rclpy.time
 
-from shape_msgs.msg import SolidPrimitive
+from shape_msgs.msg import (
+    Mesh,
+    MeshTriangle,
+    SolidPrimitive
+)
 from std_msgs.msg import String
+from stl import mesh
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -122,6 +132,23 @@ class CollisionWorldTest(testing.RosMockTestCase):
         test_environment.collision_objects.append(collision_object)
 
         return test_environment
+
+    def create_test_mesh(self):
+        mesh_data = mesh.Mesh.from_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chair.stl'))
+        all_vertices = np.vstack([mesh_data.v0, mesh_data.v1, mesh_data.v2])
+        vertices, indices = np.unique(all_vertices, return_inverse=True, axis=0)
+        indices = indices.reshape(3, -1).transpose()
+
+        mesh_msg = Mesh()
+        for vertex in vertices:
+            point = Point()
+            point.x, point.y, point.z = vertex.astype(np.float64)
+            mesh_msg.vertices.append(point)
+        for index in indices:
+            triangle = MeshTriangle()
+            triangle.vertex_indices = index.tolist()
+            mesh_msg.triangles.append(triangle)
+        return mesh_msg
 
     def test_creation(self):
         """Test simple use case of MobileBase class"""
@@ -522,68 +549,133 @@ class CollisionWorldTest(testing.RosMockTestCase):
             msg.primitive_poses.append(geometry.tuples_to_pose(pose))
         pub_mock.publish.assert_called_with(msg)
 
-    # def test_add_mesh_success(self):
-    #     pub_mock = self.publisher_mock.return_value
-    #     sub_mock = MagicMock()
-    #     collision_world = self.create()
-    #     collision_world._known_obj_ids_sub = sub_mock
+    def test_add_mesh_success(self):
+        collision_world = self.create()
+        pub_mock = self.publisher_mock.return_value
+        sub_mock = MagicMock()
+        collision_world._environment_sub = sub_mock
 
-    #     next_id = collision_world.next_object_id
-    #     known_ids = ObjectIdentifierArray()
-    #     known_id = ObjectIdentifier(object_id=next_id, name='mesh')
-    #     known_ids.object_ids.append(known_id)
-    #     data_mock = PropertyMock(side_effect=[ObjectIdentifierArray(),
-    #                                           known_ids])
-    #     # PropertyMock must be attached to class
-    #     type(sub_mock).data = data_mock
+        test_world = PlanningSceneWorld()
+        collision_object = CollisionObject()
+        collision_object.id = 'mesh'
+        test_world.collision_objects.append(collision_object)
+        data_mock = PropertyMock(side_effect=[PlanningSceneWorld(),
+                                              test_world])
+        type(sub_mock).data = data_mock
 
-    #     pose = geometry.pose(1, 2, 3)
-    #     id, name = collision_world.add_mesh('hoge.stl', pose=pose)
-    #     eq_(id, next_id)
-    #     eq_(name, 'mesh')
-    #     shape = Shape()
-    #     shape.type = Shape.MESH
-    #     shape.stl_file_name = 'hoge.stl'
-    #     msg = CollisionObject()
-    #     msg.id = ObjectIdentifier(object_id=next_id, name='mesh')
-    #     msg.header.stamp = ANY
-    #     msg.header.frame_id = 'map'
-    #     msg.operation.operation = CollisionObjectOperation.ADD
-    #     msg.shapes.append(shape)
-    #     msg.poses.append(geometry.tuples_to_pose(pose))
-    #     pub_mock.publish.assert_called_with(msg)
+        get_clock_mock = self.node_mock.get_clock.return_value
+        get_clock_mock.now.return_value = rclpy.time.Time()
 
-    # def test_add_meshes_success(self):
-    #     pub_mock = self.publisher_mock.return_value
-    #     sub_mock = MagicMock()
-    #     collision_world = self.create()
-    #     collision_world._known_obj_ids_sub = sub_mock
+        pose = geometry.pose(1.0, 2.0, 3.0)
+        mesh_id = collision_world.add_mesh(
+            filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chair.stl'),
+            pose=pose)
+        self.assertEqual(mesh_id, 'mesh')
 
-    #     next_id = collision_world.next_object_id
-    #     known_ids = ObjectIdentifierArray()
-    #     known_id = ObjectIdentifier(object_id=next_id, name='mesh')
-    #     known_ids.object_ids.append(known_id)
-    #     data_mock = PropertyMock(side_effect=[ObjectIdentifierArray(),
-    #                                           known_ids])
-    #     # PropertyMock must be attached to class
-    #     type(sub_mock).data = data_mock
+        mesh_msg = self.create_test_mesh()
+        msg = CollisionObject()
+        msg.id = 'mesh'
+        msg.header.stamp = rclpy.time.Time().to_msg()
+        msg.header.frame_id = 'map'
+        msg.operation = CollisionObject.ADD
+        msg.meshes.append(mesh_msg)
+        msg.mesh_poses.append(geometry.tuples_to_pose(pose))
+        pub_mock.publish.assert_called_with(msg)
 
-    #     poses = [geometry.pose(1, 2, 3), geometry.pose(4, 5, 6), geometry.pose(7, 8, 9)]
-    #     id, name = collision_world.add_mesh('hoge.stl', pose=poses)
-    #     eq_(id, next_id)
-    #     eq_(name, 'mesh')
-    #     shape = Shape()
-    #     shape.type = Shape.MESH
-    #     shape.stl_file_name = 'hoge.stl'
-    #     msg = CollisionObject()
-    #     msg.id = ObjectIdentifier(object_id=next_id, name='mesh')
-    #     msg.header.stamp = ANY
-    #     msg.header.frame_id = 'map'
-    #     msg.operation.operation = CollisionObjectOperation.ADD
-    #     for pose in poses:
-    #         msg.shapes.append(shape)
-    #         msg.poses.append(geometry.tuples_to_pose(pose))
-    #     pub_mock.publish.assert_called_with(msg)
+    def test_add_attached_mesh(self):
+        collision_world = self.create()
+        pub_mock = self.publisher_mock.return_value
+        sub_mock = MagicMock()
+        collision_world._attach_info_sub = sub_mock
+
+        test_state = RobotState()
+        attached_collision_object = AttachedCollisionObject()
+        attached_collision_object.object.id = 'mesh'
+        test_state.attached_collision_objects.append(attached_collision_object)
+        data_mock = PropertyMock(side_effect=[RobotState(),
+                                              test_state,
+                                              test_state])
+        type(sub_mock).data = data_mock
+
+        get_clock_mock = self.node_mock.get_clock.return_value
+        get_clock_mock.now.return_value = rclpy.time.Time()
+
+        pose = geometry.pose(1.0, 2.0, 3.0)
+        mesh_id = collision_world.add_attached_mesh(
+            filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chair.stl'),
+            pose=pose)
+        self.assertEqual(mesh_id, 'mesh')
+
+        mesh_msg = self.create_test_mesh()
+
+        msg = AttachedCollisionObject()
+        msg.link_name = 'hand_palm_link'
+        msg.object.id = 'mesh'
+        msg.object.header.stamp = rclpy.time.Time().to_msg()
+        msg.object.header.frame_id = 'hand_palm_link'
+        msg.object.operation = CollisionObject.ADD
+        msg.object.meshes.append(mesh_msg)
+        msg.object.mesh_poses.append(geometry.tuples_to_pose(pose))
+        pub_mock.publish.assert_called_with(msg)
+
+        attached_objects = collision_world.attached_objects
+        self.assertEqual(len(attached_objects), 1)
+        self.assertEqual(attached_objects[0].object.id, 'mesh')
+
+    @raises(ValueError)
+    def test_add_attached_mesh_bad_frame_id(self):
+        sub_mock = MagicMock()
+        collision_world = self.create()
+        collision_world._known_obj_ids_sub = sub_mock
+
+        pose = geometry.pose(1.0, 2.0, 3.0)
+        collision_world.add_attached_mesh(
+            filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chair.stl'),
+            pose=pose,
+            frame_id='arm_lift_joint')
+
+    def test_add_meshes_success(self):
+        collision_world = self.create()
+        pub_mock = self.publisher_mock.return_value
+        sub_mock = MagicMock()
+        collision_world._environment_sub = sub_mock
+
+        test_world = PlanningSceneWorld()
+        collision_object = CollisionObject()
+        collision_object.id = 'mesh'
+        test_world.collision_objects.append(collision_object)
+        data_mock = PropertyMock(side_effect=[PlanningSceneWorld(),
+                                              test_world])
+        type(sub_mock).data = data_mock
+
+        get_clock_mock = self.node_mock.get_clock.return_value
+        get_clock_mock.now.return_value = rclpy.time.Time()
+
+        poses = [geometry.pose(1.0, 2.0, 3.0), geometry.pose(4.0, 5.0, 6.0), geometry.pose(7.0, 8.0, 9.0)]
+        mesh_id = collision_world.add_mesh(
+            filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chair.stl'),
+            pose=poses)
+        self.assertEqual(mesh_id, 'mesh')
+
+        mesh_msg = self.create_test_mesh()
+        msg = CollisionObject()
+        msg.id = 'mesh'
+        msg.header.stamp = rclpy.time.Time().to_msg()
+        msg.header.frame_id = 'map'
+        msg.operation = CollisionObject.ADD
+        for pose in poses:
+            msg.meshes.append(mesh_msg)
+            msg.mesh_poses.append(geometry.tuples_to_pose(pose))
+        pub_mock.publish.assert_called_with(msg)
+
+    @raises(ValueError)
+    def test_add_attached_mesh_bad_file_path(self):
+        sub_mock = MagicMock()
+        collision_world = self.create()
+        collision_world._known_obj_ids_sub = sub_mock
+
+        pose = geometry.pose(1.0, 2.0, 3.0)
+        collision_world.add_mesh(filename='hoge.stl', pose=pose)
 
     def test_attach(self):
         collision_world = self.create()

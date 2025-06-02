@@ -1,32 +1,35 @@
-'''
-Copyright (c) 2024 TOYOTA MOTOR CORPORATION
-All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted (subject to the limitations in the disclaimer
-below) provided that the following conditions are met:
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-* Neither the name of the copyright holder nor the names of its contributors may be used
-  to endorse or promote products derived from this software without specific
-  prior written permission.
-NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
-LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
-OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
-DAMAGE.
-'''
+# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# All rights reserved.
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted (subject to the limitations in the disclaimer
+# below) provided that the following conditions are met:
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+# * Neither the name of the copyright holder nor the names of its contributors may be used
+#   to endorse or promote products derived from this software without specific
+#   prior written permission.
+# NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
+# LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+# GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+# OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+# DAMAGE.
 # vim: fileencoding=utf-8
 """This module contains classes and functions to move joints."""
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
 
 import asyncio
 import math
@@ -429,22 +432,22 @@ class JointGroup(robot.Item):
 
     def _set_constraint_tsrs(self, req):
         if len(self._constraint_tsrs) > 0:
-            # It is important to put TSR here
-            # Since this request variable is also found in hands goals, etc., TSR constraints should be added in the same way.
+            # It's important to insert tsr here
+            # This request variable is also in hand goals, so tsr constraints can be similarly added
             req.constraint_tsrs = self._constraint_tsrs
-            # If you restrict only the posture transition, it is necessary that the bogie can move.
-            # This process is not required except for the gaze transition
+            # If you only want to constrain posture transition, even the cart needs to be allowed to move temporarily
+            # This process is unnecessary if it's not gaze transition
             #
-            # The IK is solving in the middle of the process, but if it is less than 6 flexibility, IK itself becomes an error.
-            # In the first place, I felt weird to solve the IK for constraints in CBirrt2, but what do you do?
-            # If you want to implement without using IK, comment out +
-            # In ConstraintotSr of tmc_manipulation_planner/tmc_robot_planner/src/Robot_cbirrt_planner.cpp
-            # In the else part of CalcDistanceTotsR, suddenly Return False; +
-            # _Planning_max_iteration increase by about a single digit
-            # It is unknown which IK is used/uses, and which is better
+            # During the processing, IK is being solved, but it's specified that IK will error out with less than 6 DOF
+            # Starting to feel weird that CBiRRT2 is solving IK against constraints, what to do about it...
+            # If you want an implementation without using IK, comment out here +
+            # In tmc_manipulation_planner/tmc_robot_planner/src/robot_cbirrt_planner.cpp at ConstrainToTsr
+            # In the else part of CalcDistanceToTsr, return false; outright +
+            # Increase _PLANNING_MAX_ITERATION by about one digit
+            # Not sure which performs better, with or without using IK
             #
             if req.base_movement_type.val is BaseMovementType.NONE:
-                # PLANWITHJOINTGOALSREQUEST only _generate_planning_request is set to None
+                # Only PlanWithJointGoalsRequest is set to NONE in _generate_planning_request
                 req.base_movement_type.val = BaseMovementType.RAIL_X
                 req.weighted_joints = ['_linear_base']
                 req.weight = [100.0]
@@ -651,9 +654,9 @@ class JointGroup(robot.Item):
             self._node, tf_future, timeout_sec=self._tf_timeout)
 
         transform = asyncio.run(self._tf2_buffer.lookup_transform_async(
-            self._end_effector_frame,
-            ref_frame_id,
-            rclpy.time.Time()
+            target_frame=ref_frame_id,
+            source_frame=self._end_effector_frame,
+            time=rclpy.time.Time()
         ))
 
         return geometry.transform_to_tuples(transform.transform)
@@ -1105,8 +1108,8 @@ class JointGroup(robot.Item):
 
             request.attached_objects = self._collision_world.attached_objects
 
-            # Request.environment_before_planning is not included in Attached_objects
-            # Since the operation plan fails, add it here
+            # If objects not included in request.environment_before_planning are in attached_objects
+            # The motion planning may fail, so add them here
             for attached_object in self._collision_world.attached_objects:
                 already_known_object_flag = False
                 for known_object in request.environment_before_planning.collision_objects:
@@ -1191,6 +1194,7 @@ class JointGroup(robot.Item):
             None
         """
         clients = []
+        # TODO() : impedance_clientをサポートする。
         if False:  # self._impedance_client.config is not None:
             clients.append(self._impedance_client)
         else:

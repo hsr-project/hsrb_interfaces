@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2025 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -24,23 +24,49 @@
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
 # OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 # DAMAGE.
-"""Unittest intialize hsrb_interface.robot module."""
+"""Testing motion planning interface in Gazebo simulator."""
 
 import unittest
 
-import hsrb_interface
-import pytest
-
-import rclpy
+import _testing as testing
 
 
-@pytest.mark.launch_test
-class AutoInitTest(unittest.TestCase):
-    @classmethod
-    def tearDownClass(cls):
-        rclpy.shutdown()
+class WholeBodyTest(testing.HsrbInterfaceTest):
+    """Test cases for whole_body object."""
 
-    def test_auto_init(self):
-        """Test auto init rclpy"""
-        hsrb_interface.Robot()
-        self.assertTrue(rclpy.ok())
+    def test_move_to_joint_positions(self):
+        """Driving each joint."""
+        self.whole_body.move_to_neutral()
+
+        self.assertListEqual(self.JOINT_NAMES, sorted(self.whole_body.joint_names))
+
+        self.whole_body.move_to_joint_positions({'arm_lift_joint': 0.2})
+        expected_pose = {'arm_lift_joint': 0.2}
+        self.expect_joints_reach_goals(expected_pose, delta=0.01)
+
+        self.whole_body.move_to_joint_positions({'head_pan_joint': 0.4,
+                                                 'head_tilt_joint': -0.2})
+        expected_pose = {'head_pan_joint': 0.4,
+                         'head_tilt_joint': -0.2}
+        self.expect_joints_reach_goals(expected_pose, delta=0.01)
+
+    def test_move_to_joint_positions_multiple_targets(self):
+        """Driving each joint."""
+        self.whole_body.move_to_neutral()
+
+        self.assertListEqual(self.JOINT_NAMES, sorted(self.whole_body.joint_names))
+
+        self.whole_body.move_to_joint_positions_multiple_targets(
+            ['arm_lift_joint', 'arm_flex_joint', 'arm_roll_joint'],
+            [[0.2, -0.3, -1.57]]
+        )
+        expected_pose = {
+            'arm_lift_joint': 0.2,
+            'arm_flex_joint': -0.3,
+            'arm_roll_joint': -1.57
+        }
+        self.expect_joints_reach_goals(expected_pose, delta=0.01)
+
+
+if __name__ == '__main__':
+    unittest.main()
