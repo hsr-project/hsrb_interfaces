@@ -2,6 +2,12 @@
 Changelog for package hsrb_interface_py
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+2.3.0 (2025-07-29)
+-------------------
+* Add controller state topic
+* Change for Ignition Gazebo
+* Contributors: Shigeo Tsuduki
+
 2.2.0 (2025-04-22)
 -------------------
 * Add follow_distance_trajectory_action

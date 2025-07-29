@@ -31,7 +31,6 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import asyncio
 import copy
 from itertools import repeat
 import time
@@ -39,7 +38,6 @@ import traceback
 
 import action_msgs.msg as action_msgs
 from control_msgs.action import FollowJointTrajectory
-from moveit_msgs.msg import MoveItErrorCodes
 import rclpy
 from rclpy.action import ActionClient
 import tf_transformations as T
@@ -186,9 +184,8 @@ def timeopt_filter(base_trajectory, node):
         future = filter_service.call_async(req)
         rclpy.spin_until_future_complete(node, future)
         res = future.result()
-        if res.error_code.val != MoveItErrorCodes.SUCCESS:
-            msg = "Failed to filter trajectory" + str(type(res.error_code))
-            raise exceptions.TrajectoryFilterError(msg, res.error_code)
+        if not res.is_success:
+            return None
     except Exception:
         traceback.print_exc()
         raise
@@ -197,7 +194,7 @@ def timeopt_filter(base_trajectory, node):
 
 
 def hsr_timeopt_filter(merged_trajectory, start_state, node):
-    """whole body timeopt filter.
+    """Whole body timeopt filter.
 
     Args:
        merged_trajectory (trajectory_msgs.msg.JointTrajectory):
@@ -251,15 +248,13 @@ def transform_base_trajectory(
         trajectory_msgs.msg.JointTrajectory:
             A base trajectory based on ``odom`` frame.
     """
-    stamp = rclpy.time.Time()
-    odom_to_frame_future = tf2_buffer.wait_for_transform_async(
-        target_frame=_BASE_TRAJECTORY_ORIGIN,
-        source_frame=base_traj.header.frame_id,
-        time=stamp)
-    rclpy.spin_until_future_complete(node, odom_to_frame_future, timeout_sec=tf_timeout)
-    odom_to_frame_transform = asyncio.run(tf2_buffer.lookup_transform_async(
-        _BASE_TRAJECTORY_ORIGIN, base_traj.header.frame_id, stamp))
-
+    odom_to_frame_transform = utils.get_transform(
+        node,
+        tf2_buffer,
+        _BASE_TRAJECTORY_ORIGIN,
+        base_traj.header.frame_id,
+        tf_timeout
+    )
     odom_to_frame = geometry.transform_to_tuples(
         odom_to_frame_transform.transform)
 
@@ -340,7 +335,7 @@ class TrajectoryController(robot.Item):
         goal_handle = self._send_goal_future.result()
         get_result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(
-            self._node, get_result_future, timeout_sec=1.0)
+            self._node, get_result_future, timeout_sec=0.1)
         res = get_result_future.result()
         if res is None:
             return action_msgs.GoalStatus.STATUS_EXECUTING
@@ -401,7 +396,7 @@ def wait_controllers(node, controllers):
     try:
         while True:
             states = [c.get_state() for c in controllers]
-            if any(map(lambda s: s not in ok_set, states)):
+            if any(s not in ok_set for s in states):
                 log = []
                 for c in controllers:
                     log.append("{0}({1})".format(c.controller_name,
@@ -410,7 +405,7 @@ def wait_controllers(node, controllers):
                 reason = ', '.join(log)
                 text = "Playing trajectory failed: {0}".format(reason)
                 raise exceptions.FollowTrajectoryError(text)
-            if all([s == action_msgs.GoalStatus.STATUS_SUCCEEDED for s in states]):
+            if all(s == action_msgs.GoalStatus.STATUS_SUCCEEDED for s in states):
                 break
             time.sleep(float(1.0 / watch_rate))
     except KeyboardInterrupt:

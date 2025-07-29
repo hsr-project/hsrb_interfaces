@@ -31,7 +31,6 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import asyncio
 import math
 import warnings
 
@@ -170,7 +169,7 @@ class MobileBase(robot.Item):
                    base.go_abs(1.0, 0.0, 0.0)
         """
         _validate_timeout(timeout)
-        pose = geometry.pose(x, y, 0.0, 0.0, 0.0, yaw)
+        pose = geometry.pose(float(x), float(y), 0.0, 0.0, 0.0, float(yaw))
         ref_frame_id = settings.get_frame('map')
         goal = self.create_go_pose_goal(pose, ref_frame_id)
         self._send_goal_pose_and_wait(goal, timeout)
@@ -307,19 +306,13 @@ class MobileBase(robot.Item):
         if ref_frame_id is None:
             ref_frame_id = settings.get_frame('map')
 
-        tf_future = self._tf2_buffer.wait_for_transform_async(
-            target_frame=ref_frame_id,
-            source_frame=settings.get_frame('base'),
-            time=rclpy.time.Time()
-        )
-
-        rclpy.spin_until_future_complete(
-            self._node, tf_future, timeout_sec=_TF_TIMEOUT)
-        trans = asyncio.run(self._tf2_buffer.lookup_transform_async(
+        trans = utils.get_transform(
+            self._node,
+            self._tf2_buffer,
             ref_frame_id,
             settings.get_frame('base'),
-            rclpy.time.Time()
-        ))
+            _TF_TIMEOUT
+        )
 
         return geometry.transform_to_tuples(trans.transform)
 
