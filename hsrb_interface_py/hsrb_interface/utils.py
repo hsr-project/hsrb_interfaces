@@ -31,6 +31,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import asyncio
 import copy
 import threading
 import time
@@ -192,3 +193,23 @@ def wait_until_complete(node, future, timeout=None):
             break
         timeout_sec -= sleep_time
     return res
+
+
+def get_transform(node, tf2_buffer, target_frame, source_frame, timeout=None):
+    # Wait for the current time tf
+    tf_future = tf2_buffer.wait_for_transform_async(
+        target_frame=target_frame,
+        source_frame=source_frame,
+        time=node.get_clock().now()
+    )
+
+    wait_until_complete(node, tf_future, timeout)
+
+    # Acquire the latest available tf
+    transform = asyncio.run(tf2_buffer.lookup_transform_async(
+        target_frame=target_frame,
+        source_frame=source_frame,
+        time=rclpy.time.Time()
+    ))
+
+    return transform

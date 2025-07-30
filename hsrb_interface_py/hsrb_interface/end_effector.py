@@ -1,35 +1,36 @@
-'''
-Copyright (c) 2024 TOYOTA MOTOR CORPORATION
-All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted (subject to the limitations in the disclaimer
-below) provided that the following conditions are met:
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-* Neither the name of the copyright holder nor the names of its contributors may be used
-  to endorse or promote products derived from this software without specific
-  prior written permission.
-NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
-LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
-OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
-DAMAGE.
-'''
+# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# All rights reserved.
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted (subject to the limitations in the disclaimer
+# below) provided that the following conditions are met:
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+# * Neither the name of the copyright holder nor the names of its contributors may be used
+#   to endorse or promote products derived from this software without specific
+#   prior written permission.
+# NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE GRANTED BY THIS
+# LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+# GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+# OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+# DAMAGE.
 # vim: fileencoding=utf-8
 """This module contains classes to control end-effector."""
 
-import math
-import time
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
 import warnings
 
 import action_msgs.msg as action_msgs
@@ -39,7 +40,9 @@ import rclpy
 from rclpy.action import ActionClient
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
+from std_msgs.msg import Float32
 from tmc_control_msgs.action import GripperApplyEffort
+from tmc_control_msgs.action import GripperSetDistance
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 
@@ -53,31 +56,15 @@ _GRIPPER_GRASP_TIMEOUT = 20.0
 _GRIPPER_APPLY_FORCE_TIMEOUT = 10.0
 _GRIPPER_APPLY_FORCE_DELICATE_THRESHOLD = 0.8
 _HAND_MOMENT_ARM_LENGTH = 0.07
-_HAND_MOTOR_JOINT_MAX = 1.2
-_HAND_MOTOR_JOINT_MIN = -0.5
 _JOINT_STATE_SUB_TIMEOUT = 3.0
 
-_DISTANCE_CONTROL_PGAIN = 0.5
-_DISTANCE_CONTROL_IGAIN = 1.0
-_DISTANCE_CONTROL_RATE = 3.0
-_DISTANCE_CONTROL_TIME_FROM_START = 0.2
-_DISTANCE_CONTROL_STALL_THRESHOLD = 0.003
-_DISTANCE_CONTROL_STALL_TIMEOUT = 1.0
-
+# TODO(OTA): 以下パラメータをurdfから取ってくる
 _PALM_TO_PROXIMAL_Y = 0.0245
 _PROXIMAL_TO_DISTAL_Z = 0.07
 _DISTAL_JOINT_ANGLE_OFFSET = 0.087
+# TODO(OTA): tip_linkがモデルから浮いているので修正する
 _DISTAL_TO_TIP_Y = 0.01865
 _DISTAL_TO_TIP_Z = 0.04289
-
-_DISTANCE_MAX = (_PALM_TO_PROXIMAL_Y
-                 - (_DISTAL_TO_TIP_Y * math.cos(_DISTAL_JOINT_ANGLE_OFFSET)
-                    + _DISTAL_TO_TIP_Z * math.sin(_DISTAL_JOINT_ANGLE_OFFSET))
-                 + _PROXIMAL_TO_DISTAL_Z * math.sin(_HAND_MOTOR_JOINT_MAX)) * 2
-_DISTANCE_MIN = (_PALM_TO_PROXIMAL_Y
-                 - (_DISTAL_TO_TIP_Y * math.cos(_DISTAL_JOINT_ANGLE_OFFSET)
-                    + _DISTAL_TO_TIP_Z * math.sin(_DISTAL_JOINT_ANGLE_OFFSET))
-                 + _PROXIMAL_TO_DISTAL_Z * math.sin(_HAND_MOTOR_JOINT_MIN)) * 2
 
 
 class Gripper(robot.Item):
@@ -106,12 +93,21 @@ class Gripper(robot.Item):
             FollowJointTrajectory,
             prefix + "/follow_joint_trajectory"
         )
+        self._follow_distance_trajectory_client = ActionClient(
+            self._node,
+            FollowJointTrajectory,
+            prefix + "/follow_distance_trajectory"
+        )
         self._grasp_client = ActionClient(
             self._node,
             GripperApplyEffort,
             prefix + "/grasp"
         )
-
+        self._set_distance_client = ActionClient(
+            self._node,
+            GripperSetDistance,
+            prefix + "/set_distance"
+        )
         self._apply_force_client = ActionClient(
             self._node,
             GripperApplyEffort,
@@ -121,10 +117,14 @@ class Gripper(robot.Item):
             "/joint_states",
             JointState
         )
+        self._fingertip_distance_sub = CachingSubscriber(
+            prefix + "/fingertip_distance",
+            Float32
+        )
         self._joint_state_sub.wait_for_message(
             timeout=_JOINT_STATE_SUB_TIMEOUT)
 
-        # Variables to remember asynchronous behavior just before. The initial value is None
+        # Variable to remember the last asynchronous action. Initial value is None
         self._current_client = None
 
     def command(self, open_angle, motion_time=1.0, sync=True):
@@ -154,25 +154,8 @@ class Gripper(robot.Item):
                 time_from_start=rclpy.duration.Duration(
                     seconds=motion_time).to_msg())]
         self._send_goal(self._follow_joint_trajectory_client, goal)
-        if not sync:
-            return
-        start_time = self._node.get_clock().now()
-        elapsed_time = rclpy.duration.Duration(seconds=0.0)
-        while elapsed_time < rclpy.duration.Duration(seconds=_GRIPPER_FOLLOW_TRAJECTORY_TIMEOUT):
-            try:
-                rclpy.spin_until_future_complete(
-                    self._node, self._send_goal_future, timeout_sec=0.1)
-                if self._send_goal_future.result() is not None:
-                    state = self.get_state()
-                    if state == action_msgs.GoalStatus.STATUS_SUCCEEDED:
-                        return
-                    if state != action_msgs.GoalStatus.STATUS_EXECUTING:
-                        msg = "Failed to follow commanded trajectory"
-                        raise exceptions.GripperError(msg)
-                elapsed_time = self._node.get_clock().now() - start_time
-            except KeyboardInterrupt:
-                self.cancel_goal()
-        self.cancel_goal()
+        if sync:
+            self._wait_controller(msg="Failed to follow commanded trajectory")
 
     def get_distance(self):
         """Command get gripper finger tip distance.
@@ -180,73 +163,47 @@ class Gripper(robot.Item):
         Returns:
             double: Distance between gripper finger tips [m]
         """
-        self._joint_state_sub.wait_for_message()
-        joint_state = self._joint_state_sub.data
-        hand_motor_pos = joint_state.position[
-            joint_state.name.index(self._joint_names[0])]
-        hand_left_position = joint_state.position[
-            joint_state.name.index(
-                self._left_finger_joint_name)] + hand_motor_pos
-        hand_right_position = joint_state.position[
-            joint_state.name.index(
-                self._right_finger_joint_name)] + hand_motor_pos
-        return ((math.sin(hand_left_position) + math.sin(hand_right_position)) * _PROXIMAL_TO_DISTAL_Z
-                + 2 * (_PALM_TO_PROXIMAL_Y
-                       - (_DISTAL_TO_TIP_Y * math.cos(_DISTAL_JOINT_ANGLE_OFFSET)
-                          + _DISTAL_TO_TIP_Z * math.sin(_DISTAL_JOINT_ANGLE_OFFSET))))
+        self._fingertip_distance_sub.wait_for_message()
+        return self._fingertip_distance_sub.data.data
 
-    def set_distance(self, distance, control_time=3.0):
+    def set_distance(self, distance, control_time=3.0, sync=True):
         """Command set gripper finger tip distance.
 
         Args:
             distance (float): Distance between gripper finger tips [m]
+            control_time (float): Maximum time to wait for command to finish [s]
+            sync (bool): Not wait the result when this arg is ``False``
         """
-        if distance > _DISTANCE_MAX:
-            open_angle = _HAND_MOTOR_JOINT_MAX
-            self.command(open_angle)
-        elif distance < _DISTANCE_MIN:
-            open_angle = _HAND_MOTOR_JOINT_MIN
-            self.command(open_angle)
+        goal = GripperSetDistance.Goal()
+        goal.distance = distance
+        self._send_goal(self._set_distance_client, goal)
+        if sync:
+            self._wait_controller(msg="Failed to set distance", wait_time_max=control_time)
+
+    def set_distance_trajectory(self, distance, motion_time=1.0, sync=True):
+        """Command set gripper finger tip distance trajectory.
+
+        Args:
+            distance (float): Distance between gripper finger tips [m]
+            motion_time (float): Time to execute command[s]
+            sync (bool): Not wait the result when this arg is ``False``
+
+        Returns:
+            None
+        """
+        if motion_time <= 0.0:
+            self.set_distance(distance)
         else:
             goal = FollowJointTrajectory.Goal()
             goal.trajectory.joint_names = self._joint_names
             goal.trajectory.points = [
                 JointTrajectoryPoint(
+                    positions=[distance],
                     time_from_start=rclpy.duration.Duration(
-                        seconds=1 / _DISTANCE_CONTROL_RATE).to_msg())]
-
-            start_time = self._node.get_clock().now()
-            elapsed_time = rclpy.duration.Duration(seconds=0.0)
-            ierror = 0.0
-            theta_ref = math.asin(
-                ((distance / 2
-                  - (_PALM_TO_PROXIMAL_Y
-                     - (_DISTAL_TO_TIP_Y * math.cos(_DISTAL_JOINT_ANGLE_OFFSET)
-                        + _DISTAL_TO_TIP_Z * math.sin(_DISTAL_JOINT_ANGLE_OFFSET))))
-                 / _PROXIMAL_TO_DISTAL_Z))
-            last_movement_time = self._node.get_clock().now()
-            while elapsed_time < rclpy.duration.Duration(seconds=control_time):
-                try:
-                    error = distance - self.get_distance()
-                    if abs(error) > _DISTANCE_CONTROL_STALL_THRESHOLD:
-                        last_movement_time = self._node.get_clock().now()
-                    if ((self._node.get_clock().now() - last_movement_time)
-                            > rclpy.duration.Duration(seconds=_DISTANCE_CONTROL_STALL_TIMEOUT)):
-                        break
-                    ierror += error
-                    open_angle = (theta_ref + _DISTANCE_CONTROL_PGAIN * error + _DISTANCE_CONTROL_IGAIN * ierror)
-                    goal.trajectory.points = [
-                        JointTrajectoryPoint(
-                            positions=[open_angle],
-                            time_from_start=rclpy.duration.Duration(
-                                seconds=_DISTANCE_CONTROL_TIME_FROM_START).to_msg())]
-                    send_goal_future = self._follow_joint_trajectory_client.send_goal_async(goal)
-                    elapsed_time = self._node.get_clock().now() - start_time
-                except KeyboardInterrupt:
-                    if send_goal_future is not None:
-                        send_goal_future.cancel()
-                    return
-                time.sleep(1.0 / _DISTANCE_CONTROL_RATE)
+                        seconds=motion_time).to_msg())]
+            self._send_goal(self._follow_distance_trajectory_client, goal)
+            if sync:
+                self._wait_controller(msg="Failed to follow distance trajectory")
 
     def grasp(self, effort):
         """Command a gripper to execute grasping move.
@@ -297,40 +254,48 @@ class Gripper(robot.Item):
                 self._node.get_logger().warn("Since effort is high, force control become invalid.")
 
         self._send_goal(client, goal)
-        if not sync:
-            return
-        start_time = self._node.get_clock().now()
-        elapsed_time = rclpy.duration.Duration(seconds=0.0)
-        while elapsed_time < rclpy.duration.Duration(seconds=_GRIPPER_FOLLOW_TRAJECTORY_TIMEOUT):
-            try:
-                rclpy.spin_until_future_complete(
-                    self._node, self._send_goal_future, timeout_sec=0.1)
-                if self._send_goal_future.result() is not None:
-                    state = self.get_state()
-                    if state == action_msgs.GoalStatus.STATUS_SUCCEEDED:
-                        break
-                    if state != action_msgs.GoalStatus.STATUS_EXECUTING:
-                        msg = '"Failed to apply force {0}'.format(state)
-                        raise exceptions.GripperError(msg)
-                elapsed_time = self._node.get_clock().now() - start_time
-            except KeyboardInterrupt:
-                self.cancel_goal()
-        self.cancel_goal()
+        if sync:
+            self._wait_controller(msg="Failed to apply force")
 
     def _send_goal(self, client, goal):
         self._send_goal_future = client.send_goal_async(goal)
         self._current_client = client
+        rclpy.spin_until_future_complete(self._node, self._send_goal_future, timeout_sec=1.0)
 
     def _check_state(self, goal_status):
         if self._send_goal_future is None:
             return False
         else:
-            return self._send_goal_future.result().status == goal_status
+            return self.get_state() == goal_status
+
+    def _wait_controller(self, msg="", wait_time_max=_GRIPPER_FOLLOW_TRAJECTORY_TIMEOUT):
+        # Using the system clock because the node's clock may not measure time accurately
+        start_time = rclpy.clock.Clock().now()
+        elapsed_time = rclpy.duration.Duration(seconds=0.0)
+        while elapsed_time < rclpy.duration.Duration(seconds=wait_time_max):
+            try:
+                state = self.get_state()
+                if state == action_msgs.GoalStatus.STATUS_SUCCEEDED:
+                    return
+                if state != action_msgs.GoalStatus.STATUS_EXECUTING:
+                    self.cancel_goal()
+                    msg += " state {0}".format(state)
+                    raise exceptions.GripperError(msg)
+                elapsed_time = rclpy.clock.Clock().now() - start_time
+            except KeyboardInterrupt:
+                self.cancel_goal()
+        self.cancel_goal()
 
     def get_state(self):
         """Get a status of the action client"""
-        rclpy.spin_once(self._node, timeout_sec=0.1)
-        return self._send_goal_future.result().status
+        goal_handle = self._send_goal_future.result()
+        get_result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self._node, get_result_future, timeout_sec=0.1)
+        res = get_result_future.result()
+        if res is None:
+            return action_msgs.GoalStatus.STATUS_EXECUTING
+        else:
+            return res.status
 
     def is_moving(self):
         """Get the state as if the robot is moving.

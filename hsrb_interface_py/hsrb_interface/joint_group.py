@@ -31,11 +31,11 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import asyncio
 import math
 import sys
 import warnings
 
+from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Pose as RosPose
 from geometry_msgs.msg import TransformStamped
 from hsrb_interface_py._extension import KinematicsInterface
@@ -58,6 +58,7 @@ from tmc_planning_msgs.srv import PlanWithHandGoals
 from tmc_planning_msgs.srv import PlanWithHandLine
 from tmc_planning_msgs.srv import PlanWithJointGoals
 from tmc_planning_msgs.srv import PlanWithTsrConstraints
+from trajectory_msgs.msg import JointTrajectory
 
 import urdf_parser_py.urdf as urdf
 
@@ -255,6 +256,7 @@ class JointGroup(robot.Item):
         self._looking_hand_constraint = False
         self._constraint_tsrs = []
         self._tf_timeout = _TF_TIMEOUT
+        self._current_clients = None
 
         if _DEBUG:
             self._vis_pub = self.create_publisher(MarkerArray, "tsr_marker", 1)
@@ -266,6 +268,7 @@ class JointGroup(robot.Item):
         Returns:
             sensor_msgs.JointState: Current joint state
         """
+        self._joint_state_sub.wait_for_message(3.0)
         return self._joint_state_sub.data
 
     @property
@@ -433,27 +436,27 @@ class JointGroup(robot.Item):
     def _set_constraint_tsrs(self, req):
         if len(self._constraint_tsrs) > 0:
             # It's important to insert tsr here
-            # This request variable is also in hand goals, so tsr constraints can be similarly added
+            # This request variable is also present in end goals, so you should similarly add tsr constraints
             req.constraint_tsrs = self._constraint_tsrs
-            # If you only want to constrain posture transition, even the cart needs to be allowed to move temporarily
-            # This process is unnecessary if it's not gaze transition
+            # If you only apply constraints for posture transitions, you need to allow the trolley to move even temporarily
+            # If it's not a gaze transition, this process is unnecessary
             #
-            # During the processing, IK is being solved, but it's specified that IK will error out with less than 6 DOF
-            # Starting to feel weird that CBiRRT2 is solving IK against constraints, what to do about it...
-            # If you want an implementation without using IK, comment out here +
-            # In tmc_manipulation_planner/tmc_robot_planner/src/robot_cbirrt_planner.cpp at ConstrainToTsr
-            # In the else part of CalcDistanceToTsr, return false; outright +
-            # Increase _PLANNING_MAX_ITERATION by about one digit
-            # Not sure which performs better, with or without using IK
+            # Although the IK is being solved in the middle of the process, it's designed to fail for fewer than 6 degrees of freedom
+            # I've started to feel that solving IK for constraints in CBiRRT2 is strange, but what should be done
+            # If you want an implementation that doesn't use IK, comment here +
+            # In ConstrainToTsr in tmc_manipulation_planner/tmc_robot_planner/src/robot_cbirrt_planner.cpp
+            # Immediately return false; in the else part of CalcDistanceToTsr +
+            # Increase _PLANNING_MAX_ITERATION by a single digit
+            # It's unknown which gives better performance, using or not using IK
             #
             if req.base_movement_type.val is BaseMovementType.NONE:
-                # Only PlanWithJointGoalsRequest is set to NONE in _generate_planning_request
+                # Only in PlanWithJointGoalsRequest is it set to NONE in _generate_planning_request
                 req.base_movement_type.val = BaseMovementType.RAIL_X
                 req.weighted_joints = ['_linear_base']
                 req.weight = [100.0]
         return req
 
-    def _change_joint_state(self, joint_names, joint_positions_seq):
+    def _change_joint_state(self, joint_names, joint_positions_seq, plan_only=False):
         """Move joints to specified joint state while checking self collision.
 
         Args:
@@ -461,8 +464,11 @@ class JointGroup(robot.Item):
                 A list of joint name.
             joint_positions_seq (List[List[float]]):
                 A list of target position [m or rad].
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
         Returns:
-            None
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
         Raises:
             ValueError: Some specified joints are not found.
             ValueError: Target joints include some uncontrollable joints.
@@ -507,9 +513,12 @@ class JointGroup(robot.Item):
             raise exceptions.MotionPlanningError(msg, res.error_code)
         res.base_solution.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(res.solution)
-        self._execute_trajectory(constrained_traj)
+        if plan_only:
+            return constrained_traj
+        else:
+            self._execute_trajectory(constrained_traj)
 
-    def move_to_joint_positions_multiple_targets(self, joint_names, joint_positions_seq):
+    def move_to_joint_positions_multiple_targets(self, joint_names, joint_positions_seq, plan_only=False):
         """Move joints to goal positions with constraint.
 
         Args:
@@ -517,20 +526,18 @@ class JointGroup(robot.Item):
                 A list of joint name.
             joint_positions_seq (List[List[float]]):
                 A list of target position [m or rad].
-
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
         Returns:
-            None
-
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
         Raises:
             ValueError: Some specified joints are not found.
             ValueError: Target joints include some uncontrollable joints.
             ValueError: The number of joint_names and joint_positions are different.
-
         See Also:
             :py:attr:`.joint_names`
-
         Examples:
-
             .. sourcecode:: python
 
                 import math
@@ -558,26 +565,25 @@ class JointGroup(robot.Item):
         if not joint_names:
             return
 
-        self._change_joint_state(joint_names, joint_positions_seq)
+        return self._change_joint_state(joint_names, joint_positions_seq, plan_only)
 
-    def move_to_joint_positions(self, goals={}, **kwargs):
+    def move_to_joint_positions(self, goals={}, plan_only=False, **kwargs):
         """Move joints to a specified goal positions.
 
         Args:
             goals (Dict[str, float]):
                 A dict of pair of joint name and target position [m or rad].
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
             **kwargs:
                 Use keyword arguments to specify joint_name/posiion pairs.
                 The keyword arguments overwrite `goals` argument.
-
         Returns:
-            None
-
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
         See Also:
             :py:attr:`.joint_names`
-
         Examples:
-
             .. sourcecode:: python
 
                import math
@@ -607,9 +613,9 @@ class JointGroup(robot.Item):
         for k, v in goals.items():
             joint_names.append(k)
             joint_positions.append(v)
-        self._change_joint_state(joint_names, [joint_positions])
+        return self._change_joint_state(joint_names, [joint_positions], plan_only)
 
-    def move_to_neutral(self):
+    def move_to_neutral(self, plan_only=False):
         """Move joints to neutral(initial) pose of a robot."""
         goals = {
             'arm_lift_joint': 0.0,
@@ -620,9 +626,9 @@ class JointGroup(robot.Item):
             'head_pan_joint': 0.0,
             'head_tilt_joint': 0.0,
         }
-        self.move_to_joint_positions(goals)
+        return self.move_to_joint_positions(goals, plan_only)
 
-    def move_to_go(self):
+    def move_to_go(self, plan_only=False):
         """Move joints to a suitable pose for moving a mobile base."""
         goals = {
             'arm_flex_joint': 0.0,
@@ -633,7 +639,70 @@ class JointGroup(robot.Item):
             'head_pan_joint': 0.0,
             'head_tilt_joint': 0.0
         }
-        self.move_to_joint_positions(goals)
+        return self.move_to_joint_positions(goals, plan_only)
+
+    def execute(self, trajectory):
+        """Execute a trajectory and not wait the result.
+
+        Args:
+            trajectory (trajectory_msgs.msg.JointTrajectory):
+                A trajectory to be executed
+
+        Examples:
+            .. sourcecode:: python
+
+                rclpy.init()
+                with hsrb_interface_py.Robot() as robot:
+                    whole_body = robot.try_get('whole_body')
+                    traj = whole_body.move_to_neutral(plan_only=True)
+                    whole_body.execute(traj)
+                    while rclpy.ok():
+                        time.sleep(0.1)
+                        if not whole_body.is_moving():
+                            break
+                    print("Result: " + str(whole_body.is_succeeded())
+                rclpy.shutdown()
+        """
+        self.cancel_goal()
+        if isinstance(trajectory, JointTrajectory):
+            self._execute_trajectory(trajectory, False)
+        else:
+            raise ValueError("Invalid goal.")
+
+    def is_succeeded(self):
+        """Get the state as if the robot moving was succeeded.
+
+        Returns:
+            bool: True if success
+        """
+        if self._current_clients is None:
+            return False
+        states = [c.get_state() for c in self._current_clients]
+        return all(s == GoalStatus.STATUS_SUCCEEDED for s in states)
+
+    def wait_goal(self):
+        """Wait moving."""
+        if not self.is_moving():
+            return
+        trajectory.wait_controllers(self._node, self._current_clients)
+
+    def is_moving(self):
+        """Get the state as if the robot is moving.
+
+        Returns:
+            bool: True if the robot is moving
+        """
+        if self._current_clients is None:
+            return False
+        states = [c.get_state() for c in self._current_clients]
+        return any(s == GoalStatus.STATUS_EXECUTING for s in states)
+
+    def cancel_goal(self):
+        """Cancel moving."""
+        if not self.is_moving():
+            return
+        for client in self._current_clients:
+            client.cancel()
 
     def get_end_effector_pose(self, ref_frame_id=None):
         """Get a pose of end effector based on robot frame.
@@ -645,19 +714,12 @@ class JointGroup(robot.Item):
         if ref_frame_id is None:
             ref_frame_id = settings.get_frame('base')
 
-        tf_future = self._tf2_buffer.wait_for_transform_async(
-            target_frame=ref_frame_id,
-            source_frame=self._end_effector_frame,
-            time=rclpy.time.Time()
-        )
-        rclpy.spin_until_future_complete(
-            self._node, tf_future, timeout_sec=self._tf_timeout)
-
-        transform = asyncio.run(self._tf2_buffer.lookup_transform_async(
-            target_frame=ref_frame_id,
-            source_frame=self._end_effector_frame,
-            time=rclpy.time.Time()
-        ))
+        transform = utils.get_transform(
+            self._node,
+            self._tf2_buffer,
+            ref_frame_id,
+            self._end_effector_frame,
+            self._tf_timeout)
 
         return geometry.transform_to_tuples(transform.transform)
 
@@ -668,24 +730,17 @@ class JointGroup(robot.Item):
             geometry_msgs.msg.Pose:
                 A transform from robot ``odom`` to ``ref_frame_id``.
         """
-        tf_future = self._tf2_buffer.wait_for_transform_async(
-            target_frame=settings.get_frame('odom'),
-            source_frame=ref_frame_id,
-            time=rclpy.time.Time()
-        )
-        rclpy.spin_until_future_complete(
-            self._node, tf_future, timeout_sec=self._tf_timeout)
-
-        odom_to_ref_ros = asyncio.run(self._tf2_buffer.lookup_transform_async(
+        odom_to_ref_ros = utils.get_transform(
+            self._node,
+            self._tf2_buffer,
             settings.get_frame('odom'),
             ref_frame_id,
-            rclpy.time.Time()
-        ))
+            self._tf_timeout)
         odom_to_ref_tuples = geometry.transform_to_tuples(
             odom_to_ref_ros.transform)
         return geometry.tuples_to_pose(odom_to_ref_tuples)
 
-    def move_end_effector_pose(self, pose, ref_frame_id=None):
+    def move_end_effector_pose(self, pose, ref_frame_id=None, plan_only=False):
         """Move an end effector to a given pose.
 
         Args
@@ -693,8 +748,11 @@ class JointGroup(robot.Item):
                 The target pose(s) of the end effector frame.
             ref_frame_id (str): A base frame of an end effector.
                 The default is the robot frame(```base_footprint``).
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
         Returns:
-            None
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
         """
         # Default is the robot frame (the base frame)
         if ref_frame_id is None:
@@ -729,9 +787,12 @@ class JointGroup(robot.Item):
         res.base_solution.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(res.solution,
                                                         res.base_solution)
-        self._execute_trajectory(constrained_traj)
+        if plan_only:
+            return constrained_traj
+        else:
+            self._execute_trajectory(constrained_traj)
 
-    def move_end_effector_by_line(self, axis, distance, ref_frame_id=None):
+    def move_end_effector_by_line(self, axis, distance, ref_frame_id=None, plan_only=False):
         """Move an end effector along with a line in a 3D space.
 
         Args:
@@ -740,8 +801,11 @@ class JointGroup(robot.Item):
             ref_frame_id (str):
                 [DEPRECATED] The frame name of the target end effector.
                 ``axis`` is defined on this frame.
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
         Returns:
-            None
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
         """
         axis_length = np.linalg.norm(np.array(axis, dtype='float64'))
         if axis_length < sys.float_info.epsilon:
@@ -777,9 +841,12 @@ class JointGroup(robot.Item):
         res.base_solution.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(res.solution,
                                                         res.base_solution)
-        self._execute_trajectory(constrained_traj)
+        if plan_only:
+            return constrained_traj
+        else:
+            self._execute_trajectory(constrained_traj)
 
-    def move_end_effector_by_arc(self, center, angle, ref_frame_id=None):
+    def move_end_effector_by_arc(self, center, angle, ref_frame_id=None, plan_only=False):
         """Move an end effector along with an arc in a 3D space.
 
         Args:
@@ -788,8 +855,11 @@ class JointGroup(robot.Item):
             angle (float): Angle to move [rad]. The range is (-PI, PI)
             ref_frame_id (str): A base frame of an end effector.
                 The default is the robot frame(```base_footprint``).
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
         Returns:
-            None
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
         """
         # Check angle value
         if not -math.pi < angle < math.pi:
@@ -842,7 +912,10 @@ class JointGroup(robot.Item):
         res.base_solution.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(res.solution,
                                                         res.base_solution)
-        self._execute_trajectory(constrained_traj)
+        if plan_only:
+            return constrained_traj
+        else:
+            self._execute_trajectory(constrained_traj)
 
     def _plan_cartesian_path(self, origin_to_pose1, origin_to_pose2,
                              odom_to_robot_pose,
@@ -986,13 +1059,18 @@ class JointGroup(robot.Item):
             raise exceptions.MotionPlanningError(msg, res.error_code)
         return res
 
-    def move_cartesian_path(self, waypoints, ref_frame_id=None):
+    def move_cartesian_path(self, waypoints, ref_frame_id=None, plan_only=False):
         """Move the end-effector along a path that follows specified waypoints.
 
         Args:
             waypoints (List[Pose]): End effector poses
             ref_frame_id (str):
                 The base frame of waypoints (default is the robot frame)
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
+        Returns:
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
         """
         if ref_frame_id is None:
             ref_frame_id = settings.get_frame('base')
@@ -1041,17 +1119,23 @@ class JointGroup(robot.Item):
 
         base_traj.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(arm_traj, base_traj)
-        self._execute_trajectory(constrained_traj)
+        if plan_only:
+            return constrained_traj
+        else:
+            self._execute_trajectory(constrained_traj)
 
-    def gaze_point(self, point=geometry.vector3(), ref_frame_id=None):
+    def gaze_point(self, point=geometry.vector3(), ref_frame_id=None, plan_only=False):
         """Point the rgbd sensor at given place.
 
         Args:
             point (Vector3): A position to point.
             ref_frame_id (str): A base frame of the point.
                 The default is the robot frame(```base_footprint``).
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
         Returns:
-            None
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
         Notes:
             If the calculated angle is over the limit, the angle is rounded.
         """
@@ -1076,7 +1160,7 @@ class JointGroup(robot.Item):
             list(base_to_point.pos), str(self._setting['rgbd_sensor_frame']))
         if len(result) == 0:
             raise RuntimeError("Cannot gaze the given point.")
-        self.move_to_joint_positions(result)
+        return self.move_to_joint_positions(result, plan_only)
 
     def _generate_planning_request(self, request_type):
         """Generate a planning request and assign common parameters to it.
@@ -1109,7 +1193,7 @@ class JointGroup(robot.Item):
             request.attached_objects = self._collision_world.attached_objects
 
             # If objects not included in request.environment_before_planning are in attached_objects
-            # The motion planning may fail, so add them here
+            # The motion plan will fail, so add them here
             for attached_object in self._collision_world.attached_objects:
                 already_known_object_flag = False
                 for known_object in request.environment_before_planning.collision_objects:
@@ -1124,11 +1208,11 @@ class JointGroup(robot.Item):
             request.base_movement_type.val = BaseMovementType.NONE
             return request
         else:
-            use_joints = set(['wrist_flex_joint',
-                              'wrist_roll_joint',
-                              'arm_roll_joint',
-                              'arm_flex_joint',
-                              'arm_lift_joint'])
+            use_joints = {'wrist_flex_joint',
+                          'wrist_roll_joint',
+                          'arm_roll_joint',
+                          'arm_flex_joint',
+                          'arm_lift_joint'}
             if self._looking_hand_constraint:
                 use_joints.update(
                     self._setting['looking_hand_constraint']['use_joints'])
@@ -1181,7 +1265,7 @@ class JointGroup(robot.Item):
                 merged_traj, start_state, self._node)
         return filtered_merged_traj
 
-    def _execute_trajectory(self, joint_traj):
+    def _execute_trajectory(self, joint_traj, sync=True):
         """Execute a trajectory with given action clients.
 
         Action clients that actually execute trajectories are selected
@@ -1205,9 +1289,11 @@ class JointGroup(robot.Item):
                         break
         joint_states = self._get_joint_state()
 
+        self._current_clients = clients
         for client in clients:
             traj = trajectory.extract(joint_traj, client.joint_names,
                                       joint_states)
             client.submit(traj)
 
-        trajectory.wait_controllers(self._node, clients)
+        if sync:
+            trajectory.wait_controllers(self._node, clients)

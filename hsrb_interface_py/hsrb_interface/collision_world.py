@@ -146,7 +146,7 @@ class CollisionWorld(robot.Item):
             collision_obj.primitive_poses = poses
 
         collision_obj.header.frame_id = frame_id
-        collision_obj.header.stamp = self._node.get_clock().now().to_msg()
+        collision_obj.header.stamp = rclpy.time.Time().to_msg()
         return collision_obj
 
     def _create_mesh(self, filename):
