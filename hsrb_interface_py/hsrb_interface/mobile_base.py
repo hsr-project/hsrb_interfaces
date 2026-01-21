@@ -68,7 +68,6 @@ class MobileBase(robot.Item):
     """Abstract interface to control a mobile base.
 
     Example:
-
         .. sourcecode:: python
 
            with hsrb_interface.Robot() as robot:
@@ -114,7 +113,6 @@ class MobileBase(robot.Item):
                 A reference frame of a goal. Default is ``map`` frame.
 
         Examples:
-
             .. sourcecode:: python
 
                with hsrb_interface.Robot() as robot:
@@ -137,7 +135,6 @@ class MobileBase(robot.Item):
                 Default is 0.0 and wait forever.
 
         Examples:
-
             .. sourcecode:: python
 
                with hsrb_interface.Robot() as robot:
@@ -161,7 +158,6 @@ class MobileBase(robot.Item):
                 Default is 0.0 and wait forever.
 
         Examples:
-
             .. sourcecode:: python
 
                with hsrb_interface.Robot() as robot:
@@ -243,11 +239,13 @@ class MobileBase(robot.Item):
                     if (state != action_msgs.GoalStatus.STATUS_EXECUTING):
                         msg = 'Failed to reach goal ({0})'.format(status_strings[state])
                         raise exceptions.MobileBaseError(msg)
-                # If timeout is 0.0, wait indefinitely. (Do not increase elapsed time.)
+                # If the timeout is 0.0, perform infinite waiting. (Do not increase elapsed time.)
                 if timeout_sec != 0.0:
                     elapsed_time = self._node.get_clock().now() - start_time
             except KeyboardInterrupt:
-                self._action_client.cancel_goal_async()
+                goal_handle = self._send_goal_future.result()
+                goal_handle.cancel_goal_async()
+                return
 
         raise exceptions.MobileBaseError("Timed out")
 
@@ -266,7 +264,6 @@ class MobileBase(robot.Item):
             None
 
         Examples:
-
             .. sourcecode:: python
 
                with hsrb_interface.Robot() as robot:
@@ -278,7 +275,7 @@ class MobileBase(robot.Item):
         goal = self.create_follow_trajectory_goal(
             poses, time_from_starts, ref_frame_id)
         self.execute(goal)
-        trajectory.wait_controllers(self, [self._follow_client])
+        trajectory.wait_controllers(self._node, [self._follow_client])
 
     @property
     def pose(self):
@@ -396,7 +393,6 @@ class MobileBase(robot.Item):
                   trajectory_msgs.msg.JointTrajectory): A goal to move
 
         Examples:
-
             .. sourcecode:: python
 
                with hsrb_interface.Robot() as robot:
@@ -417,6 +413,7 @@ class MobileBase(robot.Item):
             action_goal.pose = goal
             self._send_goal_future = self._action_client.send_goal_async(
                 action_goal)
+            rclpy.spin_until_future_complete(self._node, self._send_goal_future, timeout_sec=1.0)
             self._current_client = self._action_client
         elif isinstance(goal, JointTrajectory):
             self._follow_client.submit(goal)
@@ -437,7 +434,7 @@ class MobileBase(robot.Item):
                 state = self.get_state()
             elif self._current_client is self._follow_client:
                 state = self._current_client.get_state()
-                return state == action_msgs.GoalStatus.STATUS_EXECUTING
+            return state == action_msgs.GoalStatus.STATUS_EXECUTING
 
     def is_succeeded(self):
         """Get the state as if the robot moving was succeeded.
@@ -449,7 +446,10 @@ class MobileBase(robot.Item):
             return False
         else:
             if self._current_client is self._action_client:
-                state = self._send_goal_future.result().status
+                goal_handle = self._send_goal_future.result()
+                get_result_future = goal_handle.get_result_async()
+                rclpy.spin_until_future_complete(self._node, get_result_future, timeout_sec=0.1)
+                state = goal_handle.status
                 return state == action_msgs.GoalStatus.STATUS_SUCCEEDED
             elif self._current_client is self._follow_client:
                 state = self._current_client.get_state()

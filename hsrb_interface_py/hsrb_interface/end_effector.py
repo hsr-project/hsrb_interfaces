@@ -124,7 +124,7 @@ class Gripper(robot.Item):
         self._joint_state_sub.wait_for_message(
             timeout=_JOINT_STATE_SUB_TIMEOUT)
 
-        # Variable to remember the last asynchronous action. Initial value is None
+        # Variable to remember the previous asynchronous behavior. Initial value is None
         self._current_client = None
 
     def command(self, open_angle, motion_time=1.0, sync=True):
@@ -269,7 +269,7 @@ class Gripper(robot.Item):
             return self.get_state() == goal_status
 
     def _wait_controller(self, msg="", wait_time_max=_GRIPPER_FOLLOW_TRAJECTORY_TIMEOUT):
-        # Using the system clock because the node's clock may not measure time accurately
+        # Since the node's clock may not measure time accurately, use the system clock
         start_time = rclpy.clock.Clock().now()
         elapsed_time = rclpy.duration.Duration(seconds=0.0)
         while elapsed_time < rclpy.duration.Duration(seconds=wait_time_max):

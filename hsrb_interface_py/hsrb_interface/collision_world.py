@@ -170,44 +170,52 @@ class CollisionWorld(robot.Item):
         return mesh_msg
 
     def _wait_object_id_used(self, id, timeout=1.0):
-        start = self._node.get_clock().now()
-        while rclpy.ok():
+        timeout_sec = timeout
+        while rclpy.ok() and timeout_sec > 0.0:
             rclpy.spin_once(self._node)
             if self._is_object_id_used(id):
                 return True
-            elif (self._node.get_clock().now() - start) > rclpy.duration.Duration(seconds=timeout):
-                return False
-            time.sleep(0.1)
+
+            time.sleep(0.01)
+            timeout_sec -= 0.01
+
+        return False
 
     def _wait_object_id_attached(self, id, timeout=1.0):
-        start = self._node.get_clock().now()
-        while rclpy.ok():
+        timeout_sec = timeout
+        while rclpy.ok() and timeout_sec > 0.0:
             rclpy.spin_once(self._node)
             if self._is_object_id_attached(id):
                 return True
-            elif (self._node.get_clock().now() - start) > rclpy.duration.Duration(seconds=timeout):
-                return False
-            time.sleep(0.1)
+
+            time.sleep(0.01)
+            timeout_sec -= 0.01
+
+        return False
 
     def _wait_object_id_released(self, id, timeout=1.0):
-        start = self._node.get_clock().now()
-        while rclpy.ok():
+        timeout_sec = timeout
+        while rclpy.ok() and timeout_sec > 0.0:
             rclpy.spin_once(self._node)
             if not self._is_object_id_attached(id):
                 return True
-            elif (self._node.get_clock().now() - start) > rclpy.duration.Duration(seconds=timeout):
-                return False
-            time.sleep(0.1)
+
+            time.sleep(0.01)
+            timeout_sec -= 0.01
+
+        return False
 
     def _wait_object_id_released_all(self, timeout=1.0):
-        start = self._node.get_clock().now()
-        while rclpy.ok():
+        timeout_sec = timeout
+        while rclpy.ok() and timeout_sec > 0.0:
             rclpy.spin_once(self._node)
             if len(self._attach_info_sub.data.attached_collision_objects) == 0:
                 return True
-            elif (self._node.get_clock().now() - start) > rclpy.duration.Duration(seconds=timeout):
-                return False
-            time.sleep(0.1)
+
+            time.sleep(0.01)
+            timeout_sec -= 0.01
+
+        return False
 
     def _add_object(self, obj, pose, name, frame_id, timeout):
         object = self._create_collision_object(obj, pose, name, frame_id)
