@@ -2,6 +2,14 @@
 Changelog for package hsrb_interface_py
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+2.4.0 (2025-12-04)
+-------------------
+* Fix flake8 error.
+* Add omni_base test for ros2 humble.
+* Change hsrb_interfacese use tmc_navigation for humble.
+* Add base roll control command
+* Contributors: Shigeo Tsuduki, 柴宮 和希
+
 2.3.0 (2025-07-29)
 -------------------
 * Add controller state topic

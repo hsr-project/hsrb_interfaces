@@ -436,21 +436,21 @@ class JointGroup(robot.Item):
     def _set_constraint_tsrs(self, req):
         if len(self._constraint_tsrs) > 0:
             # It's important to insert tsr here
-            # This request variable is also present in end goals, so you should similarly add tsr constraints
+            # This request variable is also present in hand goals, so you should insert tsr constraints in the same way
             req.constraint_tsrs = self._constraint_tsrs
-            # If you only apply constraints for posture transitions, you need to allow the trolley to move even temporarily
-            # If it's not a gaze transition, this process is unnecessary
+            # When constraining only with posture transition, it's necessary to allow the cart to move, even if temporarily
+            # This process is unnecessary if it's not a gaze transition
             #
-            # Although the IK is being solved in the middle of the process, it's designed to fail for fewer than 6 degrees of freedom
-            # I've started to feel that solving IK for constraints in CBiRRT2 is strange, but what should be done
-            # If you want an implementation that doesn't use IK, comment here +
-            # In ConstrainToTsr in tmc_manipulation_planner/tmc_robot_planner/src/robot_cbirrt_planner.cpp
+            # Although IK is being solved in the middle of the process, IK itself will result in an error if there are less than 6 degrees of freedom
+            # I'm starting to feel that solving IK for constraints with CBiRRT2 is strange, but what should I do?
+            # If you want to implement without using IK, comment out here +
+            # In ConstrainToTsr of tmc_manipulation_planner/tmc_robot_planner/src/robot_cbirrt_planner.cpp
             # Immediately return false; in the else part of CalcDistanceToTsr +
-            # Increase _PLANNING_MAX_ITERATION by a single digit
-            # It's unknown which gives better performance, using or not using IK
+            # Increase _PLANNING_MAX_ITERATION by about one digit
+            # It's unclear which performs better, with or without using IK
             #
             if req.base_movement_type.val is BaseMovementType.NONE:
-                # Only in PlanWithJointGoalsRequest is it set to NONE in _generate_planning_request
+                # Only PlanWithJointGoalsRequest is set to NONE in _generate_planning_request
                 req.base_movement_type.val = BaseMovementType.RAIL_X
                 req.weighted_joints = ['_linear_base']
                 req.weight = [100.0]
@@ -1192,8 +1192,8 @@ class JointGroup(robot.Item):
 
             request.attached_objects = self._collision_world.attached_objects
 
-            # If objects not included in request.environment_before_planning are in attached_objects
-            # The motion plan will fail, so add them here
+            # If there are objects in attached_objects that are not included in request.environment_before_planning
+            # The motion planning will fail, so add them here
             for attached_object in self._collision_world.attached_objects:
                 already_known_object_flag = False
                 for known_object in request.environment_before_planning.collision_objects:

@@ -49,7 +49,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_utils test/test_utils.py)
   ament_add_pytest_test(test_whole_body test/test_whole_body.py)
   ament_add_pytest_test(test_collision_world test/test_collision_world.py)
-  
+  ament_add_pytest_test(test_omni_base test/test_omni_base.py)
+
 endif()
 
 ament_export_include_directories(include)

@@ -122,7 +122,7 @@ _HSRB_SETTINGS = """
     "mobile_base": {
         "omni_base": {
             "class": ["mobile_base", "MobileBase"],
-            "navigation_action": "/navigate_to_pose",
+            "navigation_action": "/move_base/move",
             "follow_trajectory_action": "/omni_base_controller",
             "pose_topic": "/global_pose",
             "goal_topic": "/base_goal",

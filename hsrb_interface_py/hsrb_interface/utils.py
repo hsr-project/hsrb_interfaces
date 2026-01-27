@@ -205,7 +205,7 @@ def get_transform(node, tf2_buffer, target_frame, source_frame, timeout=None):
 
     wait_until_complete(node, tf_future, timeout)
 
-    # Acquire the latest available tf
+    # Get the latest obtainable tf
     transform = asyncio.run(tf2_buffer.lookup_transform_async(
         target_frame=target_frame,
         source_frame=source_frame,

@@ -35,19 +35,19 @@ DAMAGE.
 namespace bp = boost::python;
 
 namespace {
-// Joint name of the head Yaw joint
+// Joint name for the head Yaw joint
 const char* const kHeadYawJoint = "head_pan_joint";
-// Joint name of the head pitch joint
+// Joint name for the head pitch joint
 const char* const kHeadPitchJoint = "head_tilt_joint";
 }  // namespace
 
 namespace hsrb_interface_plugin {
 
-/// Kinematics interface, implemented only for calculating head joint angles to face any given coordinates
+/// Kinematics interface, only implements head joint angle calculation to direct gaze at any coordinates
 class KinematicsInterface {
  public:
   /// Constructor
-  /// @param[in] robot_description Robot model
+  /// @param[in] robot_description  Robot model
   explicit KinematicsInterface(const std::string& robot_description) {
     std::vector<std::string> head_joint_names;
     head_joint_names.push_back(kHeadYawJoint);
@@ -57,11 +57,11 @@ class KinematicsInterface {
                                               head_joint_names));
   }
 
-  /// Calculates head joint angles to look at the given location
-  /// @param[in] baselink_to_point Point coordinates in robot's base frame, [x, y, z]
+  /// Calculates the head joint angles to look at a given location
+  /// @param[in] baselink_to_point Gaze point coordinates relative to the robot, [x, y, z]
   /// @param[in] camera_frame Frame name of the target camera
-  /// @return boost::python::dict Head pan and tilt joint angles
-  ///                             Returns an empty dictionary if calculation fails
+  /// @return boost::python::dict Head pan-tilt joint angles
+  ///                             Returns an empty dictionary if the calculation fails
   bp::dict CalculateAngles(const bp::list& baselink_to_point,
                            const std::string& camera_frame) {
     if (bp::len(baselink_to_point) != 3) {
@@ -71,8 +71,8 @@ class KinematicsInterface {
         static_cast<double>(bp::extract<double>(baselink_to_point[0])),
         static_cast<double>(bp::extract<double>(baselink_to_point[1])),
         static_cast<double>(bp::extract<double>(baselink_to_point[2])));
-    // The third argument current_joint_state can be omitted for HSR-B head configuration
-    // head_joint_state will be clamped to its value if joint angle limits are exceeded
+    // The third argument current_joint_state can be empty for the head configuration of HSR-B
+    // head_joint_state is rounded to the limit value if it exceeds the joint angle limits
     tmc_manipulation_types::JointState head_joint_state;
     if (!head_kinematics_->CalculateAngleToGazePoint(
             target, camera_frame,

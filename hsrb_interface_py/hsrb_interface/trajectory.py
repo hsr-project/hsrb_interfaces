@@ -357,17 +357,16 @@ class TrajectoryController(robot.Item):
         result_status = future.result().status
         return status_strings[result_status]
 
-    def get_result(self, timeout=None):
+    def get_result(self):
         """Get a result of a current goal.
 
         Returns:
             FollowJointTrajectoryResult: Execution result
         """
-        goal_handle = self._send_goal_future.result()
-        if goal_handle.get_result_async() is None:
+        future = self.get_result_async()
+        if future is None:
             return None
 
-        future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(self._node, future)
         result = future.result()
         if result.result.error_code != FollowJointTrajectory.Result.SUCCESSFUL:
@@ -376,6 +375,10 @@ class TrajectoryController(robot.Item):
         if result.status != action_msgs.GoalStatus.STATUS_SUCCEEDED:
             raise exceptions.FollowTrajectoryError("{0}".format(result.status))
         return result
+
+    def get_result_async(self):
+        goal_handle = self._send_goal_future.result()
+        return goal_handle.get_result_async()
 
     def _get_joint_names(self):
         return self._joint_names
@@ -394,19 +397,31 @@ def wait_controllers(node, controllers):
         action_msgs.GoalStatus.STATUS_SUCCEEDED,
     }
     try:
-        while True:
-            states = [c.get_state() for c in controllers]
+        states = []
+        future_list = []
+        for i in range(len(controllers)):
+            states.append(action_msgs.GoalStatus.STATUS_EXECUTING)
+            future_list.append(controllers[i].get_result_async())
+
+        while any(s == action_msgs.GoalStatus.STATUS_EXECUTING for s in states):
+            for i in range(len(controllers)):
+                if states[i] != action_msgs.GoalStatus.STATUS_SUCCEEDED:
+                    result = future_list[i].result()
+                    if result is not None:
+                        states[i] = result.status
+
             if any(s not in ok_set for s in states):
                 log = []
-                for c in controllers:
-                    log.append("{0}({1})".format(c.controller_name,
-                                                 c.get_state()))
-                    c.cancel()
+                for i in range(len(controllers)):
+                    log.append("{0}({1})".format(controllers[i].controller_name, states[i]))
+                    controllers[i].cancel()
                 reason = ', '.join(log)
                 text = "Playing trajectory failed: {0}".format(reason)
                 raise exceptions.FollowTrajectoryError(text)
             if all(s == action_msgs.GoalStatus.STATUS_SUCCEEDED for s in states):
                 break
+
+            rclpy.spin_once(node)
             time.sleep(float(1.0 / watch_rate))
     except KeyboardInterrupt:
         for c in controllers:
