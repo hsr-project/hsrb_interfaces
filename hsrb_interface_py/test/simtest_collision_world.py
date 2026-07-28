@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2025 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -43,7 +43,7 @@ class CollisionWorldTest(testing.HsrbInterfaceTest):
     """Test for CollisionWorld interface"""
 
     def setUp(self):
-        """Called before calling each test method
+        """Call before calling each test method
 
         XXX: Waiting collision_environment start subscription.
              We need more reliable method to wait until the node start up.
@@ -248,7 +248,7 @@ class CollisionWorldTest(testing.HsrbInterfaceTest):
         self.assertIsNotNone(box_id)
 
         cylinder_pose = geometry.pose(z=0.025, ej=math.radians(90))
-        cylinder_id = self.collision_world.add_attached_cylinder(radius=0.025, length=0.3,
+        cylinder_id = self.collision_world.add_attached_cylinder(radius=0.02, length=0.3,
                                                                  pose=cylinder_pose,
                                                                  timeout=3.0)
         self.assertIsNotNone(cylinder_id)

@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -25,11 +25,6 @@
 # DAMAGE.
 # vim: fileencoding=utf-8
 """Defitions of common exceptions."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 from moveit_msgs.msg import MoveItErrorCodes
 
@@ -123,5 +118,5 @@ class MobileBaseError(HsrbInterfaceError):
     """Something wrong in a mobile base."""
 
 
-class DeprecationWarning(Warning):
+class HsrbInterfaceDeprecationWarning(Warning):
     """Indicate a feature is deprecated."""

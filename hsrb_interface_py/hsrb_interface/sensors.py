@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -25,11 +25,6 @@
 # DAMAGE.
 # vim: fileencoding=utf-8
 """Sensor interfaces."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 from cv_bridge import CvBridge
 from geometry_msgs.msg import WrenchStamped
@@ -88,9 +83,7 @@ class Image(object):
 
         Returns:
             cv2.Mat: Result of conversion.
-
         Examples:
-
             .. sourcecode:: python
 
                import hsrb_interface
@@ -143,9 +136,7 @@ class LaserScan(object):
 
         Returns:
             sensor_msgs.msg.LaserScan: Result of conversion.
-
         Examples:
-
             .. sourcecode:: python
 
                import hsrb_interface
@@ -166,9 +157,7 @@ class LaserScan(object):
 
         Returns:
             numpy.ndarray: Result of conversion.
-
         Examples:
-
             .. sourcecode:: python
 
                import hsrb_interface
@@ -251,7 +240,7 @@ class ForceTorque(robot.Item):
         self._compensated_sub.wait_for_message(timeout)
 
     def _get_wrench(self):
-        """A getter for :py:attr:`wrench`."""
+        """Getter for :py:attr:`wrench`."""
         wrench = self._compensated_sub.data
         result = (geometry.from_ros_vector3(wrench.wrench.force),
                   geometry.from_ros_vector3(wrench.wrench.torque))
@@ -259,7 +248,7 @@ class ForceTorque(robot.Item):
     wrench = property(_get_wrench)
 
     def _get_raw_wrench(self):
-        """A getter for :py:attr:`raw`."""
+        """Getter for :py:attr:`raw`."""
         wrench = self._raw_sub.data
         result = (geometry.from_ros_vector3(wrench.wrench.force),
                   geometry.from_ros_vector3(wrench.wrench.torque))
@@ -309,7 +298,7 @@ class IMU(robot.Item):
         self._sub.wait_for_message(timeout)
 
     def _get_data(self):
-        """A getter for :py:attr:`data`."""
+        """Getter for :py:attr:`data`."""
         imu = self._sub.data
         ori = geometry.from_ros_quaternion(imu.orientation)
         angvel = geometry.from_ros_vector3(imu.angular_velocity)

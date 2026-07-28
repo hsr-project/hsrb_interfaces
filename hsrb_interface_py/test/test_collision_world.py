@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -24,10 +24,6 @@
 # OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 # DAMAGE.
 """Unittest for collision_world module"""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 import math
 import os
@@ -52,8 +48,6 @@ from moveit_msgs.msg import CollisionObject
 from moveit_msgs.msg import PlanningSceneWorld
 from moveit_msgs.msg import RobotState
 
-from nose.tools import eq_
-from nose.tools import raises
 import numpy as np
 
 from rcl_interfaces.msg import Parameter
@@ -85,13 +79,23 @@ class CollisionWorldTest(testing.RosMockTestCase):
             "environment_topic": "/collision_environment_server/environment",
             "trans_env_topic": "/collision_environment_server/transformed_environment",
             "set_frame_service": "/collision_environment_server/set_parameters",
-            "attaching_topic": "/attached_object_publisher/attaching_object_name",
-            "add_attaching_topic": "/attached_object_publisher/attaching_object_info",
-            "releasing_topic": "/attached_object_publisher/releasing_object_name",
-            "attached_info_topic": "/attached_object_publisher/attached_object",
+            "attached_object": {
+                "hand_left_palm_link": {
+                    "attaching_topic": "/hand_left/attached_object_publisher/attaching_object_name",
+                    "add_attaching_topic": "/hand_left/attached_object_publisher/attaching_object_info",
+                    "releasing_topic": "/hand_left/attached_object_publisher/releasing_object_name",
+                    "attached_info_topic": "/hand_left/attached_object_publisher/attached_object",
+                },
+                "hand_right_palm_link": {
+                    "attaching_topic": "/hand_right/attached_object_publisher/attaching_object_name",
+                    "add_attaching_topic": "/hand_right/attached_object_publisher/attaching_object_info",
+                    "releasing_topic": "/hand_right/attached_object_publisher/releasing_object_name",
+                    "attached_info_topic": "/hand_right/attached_object_publisher/attached_object",
+                }
+            },
             "end_effector_frames": [
-                "hand_palm_link",
-                "hand_l_finger_vacuum_frame"
+                "hand_left_palm_link",
+                "hand_right_palm_link"
             ]
         }
 
@@ -154,25 +158,44 @@ class CollisionWorldTest(testing.RosMockTestCase):
         """Test simple use case of MobileBase class"""
         self.create()
 
-        self.node_mock.create_publisher.assert_any_call(CollisionObject,
-                                                        '/collision_environment_server/collision_object',
-                                                        ANY)
-        self.node_mock.create_publisher.assert_any_call(String,
-                                                        '/attached_object_publisher/attaching_object_name',
-                                                        ANY)
-        self.node_mock.create_publisher.assert_any_call(AttachedCollisionObject,
-                                                        '/attached_object_publisher/attaching_object_info',
-                                                        ANY)
-        self.node_mock.create_publisher.assert_any_call(String,
-                                                        '/attached_object_publisher/releasing_object_name',
-                                                        ANY)
+        self.node_mock.create_publisher.assert_any_call(
+            CollisionObject,
+            '/collision_environment_server/collision_object',
+            ANY)
+        self.node_mock.create_publisher.assert_any_call(
+            String,
+            '/hand_left/attached_object_publisher/attaching_object_name',
+            ANY)
+        self.node_mock.create_publisher.assert_any_call(
+            AttachedCollisionObject,
+            '/hand_left/attached_object_publisher/attaching_object_info',
+            ANY)
+        self.node_mock.create_publisher.assert_any_call(
+            String,
+            '/hand_left/attached_object_publisher/releasing_object_name',
+            ANY)
+        self.node_mock.create_publisher.assert_any_call(
+            String,
+            '/hand_right/attached_object_publisher/attaching_object_name',
+            ANY)
+        self.node_mock.create_publisher.assert_any_call(
+            AttachedCollisionObject,
+            '/hand_right/attached_object_publisher/attaching_object_info',
+            ANY)
+        self.node_mock.create_publisher.assert_any_call(
+            String,
+            '/hand_right/attached_object_publisher/releasing_object_name',
+            ANY)
         self.caching_sub_mock.assert_any_call('/collision_environment_server/environment',
                                               PlanningSceneWorld,
                                               default=PlanningSceneWorld())
         self.caching_sub_mock.assert_any_call('/collision_environment_server/transformed_environment',
                                               PlanningSceneWorld,
                                               default=PlanningSceneWorld())
-        self.caching_sub_mock.assert_any_call('/attached_object_publisher/attached_object',
+        self.caching_sub_mock.assert_any_call('/hand_left/attached_object_publisher/attached_object',
+                                              RobotState,
+                                              default=RobotState())
+        self.caching_sub_mock.assert_any_call('/hand_right/attached_object_publisher/attached_object',
                                               RobotState,
                                               default=RobotState())
 
@@ -196,7 +219,7 @@ class CollisionWorldTest(testing.RosMockTestCase):
         param_service_client_mock.call_async.return_value = plan_result_mock
 
         snapshot = collision_world.snapshot()
-        eq_(snapshot, test_environment)
+        self.assertEqual(snapshot, test_environment)
         self.service_client_mock.assert_called_with(
             SetParameters,
             '/collision_environment_server/set_parameters')
@@ -227,8 +250,8 @@ class CollisionWorldTest(testing.RosMockTestCase):
         get_clock_mock.now.return_value = rclpy.time.Time()
 
         pose = geometry.pose(1.0, 2.0, 3.0)
-        id = collision_world.add_box(pose=pose)
-        eq_(id, 'box')
+        box_id = collision_world.add_box(pose=pose)
+        self.assertEqual(box_id, 'box')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.BOX
         shape.dimensions = [0.1, 0.1, 0.1]
@@ -245,7 +268,7 @@ class CollisionWorldTest(testing.RosMockTestCase):
         collision_world = self.create()
         pub_mock = self.publisher_mock.return_value
         sub_mock = MagicMock()
-        collision_world._attach_info_sub = sub_mock
+        collision_world._attach_info_sub['hand_left_palm_link'] = sub_mock
 
         test_state = RobotState()
         attached_collision_object = AttachedCollisionObject()
@@ -260,33 +283,33 @@ class CollisionWorldTest(testing.RosMockTestCase):
         get_clock_mock.now.return_value = rclpy.time.Time()
 
         pose = geometry.pose(z=0.025)
-        id = collision_world.add_attached_box(x=0.05, y=0.05, z=0.05, pose=pose)
-        eq_(id, 'box')
+        box_id = collision_world.add_attached_box(x=0.05, y=0.05, z=0.05, pose=pose, frame_id='hand_left_palm_link')
+        self.assertEqual(box_id, 'box')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.BOX
         shape.dimensions = [0.05, 0.05, 0.05]
         msg = AttachedCollisionObject()
-        msg.link_name = 'hand_palm_link'
+        msg.link_name = 'hand_left_palm_link'
         msg.object.id = 'box'
         msg.object.header.stamp = rclpy.time.Time().to_msg()
-        msg.object.header.frame_id = 'hand_palm_link'
+        msg.object.header.frame_id = 'hand_left_palm_link'
         msg.object.operation = CollisionObject.ADD
         msg.object.primitives.append(shape)
         msg.object.primitive_poses.append(geometry.tuples_to_pose(pose))
         pub_mock.publish.assert_called_with(msg)
 
         attached_objects = collision_world.attached_objects
-        eq_(len(attached_objects), 1)
-        eq_(attached_objects[0].object.id, 'box')
+        self.assertEqual(len(attached_objects), 1)
+        self.assertEqual(attached_objects[0].object.id, 'box')
 
-    @raises(ValueError)
     def test_add_attached_box_bad_frame_id(self):
-        sub_mock = MagicMock()
-        collision_world = self.create()
-        collision_world._known_obj_ids_sub = sub_mock
+        with self.assertRaises(ValueError):
+            sub_mock = MagicMock()
+            collision_world = self.create()
+            collision_world._known_obj_ids_sub = sub_mock
 
-        pose = geometry.pose(z=0.025)
-        collision_world.add_attached_box(x=0.05, y=0.05, z=0.05, pose=pose, frame_id='arm_lift_joint')
+            pose = geometry.pose(z=0.025)
+            collision_world.add_attached_box(x=0.05, y=0.05, z=0.05, pose=pose, frame_id='arm_lift_joint')
 
     def test_add_boxes(self):
         collision_world = self.create()
@@ -308,8 +331,8 @@ class CollisionWorldTest(testing.RosMockTestCase):
         poses = [geometry.pose(1.0, 2.0, 3.0),
                  geometry.pose(4.0, 5.0, 6.0),
                  geometry.pose(7.0, 8.0, 9.0)]
-        id = collision_world.add_box(pose=poses)
-        eq_(id, 'box')
+        box_id = collision_world.add_box(pose=poses)
+        self.assertEqual(box_id, 'box')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.BOX
         shape.dimensions = [0.1, 0.1, 0.1]
@@ -341,8 +364,8 @@ class CollisionWorldTest(testing.RosMockTestCase):
         get_clock_mock.now.return_value = rclpy.time.Time()
 
         pose = geometry.pose(1.0, 2.0, 3.0)
-        id = collision_world.add_sphere(pose=pose)
-        eq_(id, 'sphere')
+        sphere_id = collision_world.add_sphere(pose=pose)
+        self.assertEqual(sphere_id, 'sphere')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.SPHERE
         shape.dimensions = [0.1]
@@ -359,7 +382,7 @@ class CollisionWorldTest(testing.RosMockTestCase):
         collision_world = self.create()
         pub_mock = self.publisher_mock.return_value
         sub_mock = MagicMock()
-        collision_world._attach_info_sub = sub_mock
+        collision_world._attach_info_sub['hand_left_palm_link'] = sub_mock
 
         test_state = RobotState()
         attached_collision_object = AttachedCollisionObject()
@@ -374,32 +397,32 @@ class CollisionWorldTest(testing.RosMockTestCase):
         get_clock_mock.now.return_value = rclpy.time.Time()
 
         pose = geometry.pose(z=0.025)
-        id = collision_world.add_attached_sphere(radius=0.03, pose=pose)
-        eq_(id, 'sphere')
+        sphere_id = collision_world.add_attached_sphere(radius=0.03, pose=pose, frame_id='hand_left_palm_link')
+        self.assertEqual(sphere_id, 'sphere')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.SPHERE
         shape.dimensions = [0.03]
         msg = AttachedCollisionObject()
-        msg.link_name = 'hand_palm_link'
+        msg.link_name = 'hand_left_palm_link'
         msg.object.id = 'sphere'
         msg.object.header.stamp = rclpy.time.Time().to_msg()
-        msg.object.header.frame_id = 'hand_palm_link'
+        msg.object.header.frame_id = 'hand_left_palm_link'
         msg.object.operation = CollisionObject.ADD
         msg.object.primitives.append(shape)
         msg.object.primitive_poses.append(geometry.tuples_to_pose(pose))
         pub_mock.publish.assert_called_with(msg)
 
         attached_objects = collision_world.attached_objects
-        eq_(len(attached_objects), 1)
-        eq_(attached_objects[0].object.id, 'sphere')
+        self.assertEqual(len(attached_objects), 1)
+        self.assertEqual(attached_objects[0].object.id, 'sphere')
 
-    @raises(ValueError)
     def test_add_attached_sphere_bad_frame_id(self):
-        sub_mock = MagicMock()
-        collision_world = self.create()
-        collision_world._known_obj_ids_sub = sub_mock
+        with self.assertRaises(ValueError):
+            sub_mock = MagicMock()
+            collision_world = self.create()
+            collision_world._known_obj_ids_sub = sub_mock
 
-        collision_world.add_attached_sphere(radius=0.03, frame_id='arm_lift_joint')
+            collision_world.add_attached_sphere(radius=0.03, frame_id='arm_lift_joint')
 
     def test_add_spheres(self):
         collision_world = self.create()
@@ -421,8 +444,8 @@ class CollisionWorldTest(testing.RosMockTestCase):
         poses = [geometry.pose(1.0, 2.0, 3.0),
                  geometry.pose(4.0, 5.0, 6.0),
                  geometry.pose(7.0, 8.0, 9.0)]
-        id = collision_world.add_sphere(pose=poses)
-        eq_(id, 'sphere')
+        sphere_id = collision_world.add_sphere(pose=poses)
+        self.assertEqual(sphere_id, 'sphere')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.SPHERE
         shape.dimensions = [0.1]
@@ -454,8 +477,8 @@ class CollisionWorldTest(testing.RosMockTestCase):
         get_clock_mock.now.return_value = rclpy.time.Time()
 
         pose = geometry.pose(1.0, 2.0, 3.0)
-        id = collision_world.add_cylinder(pose=pose)
-        eq_(id, 'cylinder')
+        cylinder_id = collision_world.add_cylinder(pose=pose)
+        self.assertEqual(cylinder_id, 'cylinder')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.CYLINDER
         shape.dimensions = [0.1, 0.1]
@@ -472,7 +495,7 @@ class CollisionWorldTest(testing.RosMockTestCase):
         collision_world = self.create()
         pub_mock = self.publisher_mock.return_value
         sub_mock = MagicMock()
-        collision_world._attach_info_sub = sub_mock
+        collision_world._attach_info_sub['hand_left_palm_link'] = sub_mock
 
         test_state = RobotState()
         attached_collision_object = AttachedCollisionObject()
@@ -487,32 +510,33 @@ class CollisionWorldTest(testing.RosMockTestCase):
         get_clock_mock.now.return_value = rclpy.time.Time()
 
         pose = geometry.pose(z=0.025, ej=math.radians(90))
-        id = collision_world.add_attached_cylinder(radius=0.025, length=1.0, pose=pose)
-        eq_(id, 'cylinder')
+        cylinder_id = collision_world.add_attached_cylinder(
+            radius=0.025, length=1.0, pose=pose, frame_id='hand_left_palm_link')
+        self.assertEqual(cylinder_id, 'cylinder')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.CYLINDER
         shape.dimensions = [1.0, 0.025]
         msg = AttachedCollisionObject()
-        msg.link_name = 'hand_palm_link'
+        msg.link_name = 'hand_left_palm_link'
         msg.object.id = 'cylinder'
         msg.object.header.stamp = rclpy.time.Time().to_msg()
-        msg.object.header.frame_id = 'hand_palm_link'
+        msg.object.header.frame_id = 'hand_left_palm_link'
         msg.object.operation = CollisionObject.ADD
         msg.object.primitives.append(shape)
         msg.object.primitive_poses.append(geometry.tuples_to_pose(pose))
         pub_mock.publish.assert_called_with(msg)
 
         attached_objects = collision_world.attached_objects
-        eq_(len(attached_objects), 1)
-        eq_(attached_objects[0].object.id, 'cylinder')
+        self.assertEqual(len(attached_objects), 1)
+        self.assertEqual(attached_objects[0].object.id, 'cylinder')
 
-    @raises(ValueError)
     def test_add_attached_cylinder_bad_frame_id(self):
-        sub_mock = MagicMock()
-        collision_world = self.create()
-        collision_world._known_obj_ids_sub = sub_mock
+        with self.assertRaises(ValueError):
+            sub_mock = MagicMock()
+            collision_world = self.create()
+            collision_world._known_obj_ids_sub = sub_mock
 
-        collision_world.add_attached_cylinder(radius=0.025, length=1.0, frame_id='arm_lift_joint')
+            collision_world.add_attached_cylinder(radius=0.025, length=1.0, frame_id='arm_lift_joint')
 
     def test_add_cylinders(self):
         collision_world = self.create()
@@ -534,8 +558,8 @@ class CollisionWorldTest(testing.RosMockTestCase):
         poses = [geometry.pose(1.0, 2.0, 3.0),
                  geometry.pose(4.0, 5.0, 6.0),
                  geometry.pose(7.0, 8.0, 9.0)]
-        id = collision_world.add_cylinder(pose=poses)
-        eq_(id, 'cylinder')
+        cylinder_id = collision_world.add_cylinder(pose=poses)
+        self.assertEqual(cylinder_id, 'cylinder')
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.CYLINDER
         shape.dimensions = [0.1, 0.1]
@@ -586,7 +610,7 @@ class CollisionWorldTest(testing.RosMockTestCase):
         collision_world = self.create()
         pub_mock = self.publisher_mock.return_value
         sub_mock = MagicMock()
-        collision_world._attach_info_sub = sub_mock
+        collision_world._attach_info_sub['hand_left_palm_link'] = sub_mock
 
         test_state = RobotState()
         attached_collision_object = AttachedCollisionObject()
@@ -603,16 +627,17 @@ class CollisionWorldTest(testing.RosMockTestCase):
         pose = geometry.pose(1.0, 2.0, 3.0)
         mesh_id = collision_world.add_attached_mesh(
             filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chair.stl'),
-            pose=pose)
+            pose=pose,
+            frame_id='hand_left_palm_link')
         self.assertEqual(mesh_id, 'mesh')
 
         mesh_msg = self.create_test_mesh()
 
         msg = AttachedCollisionObject()
-        msg.link_name = 'hand_palm_link'
+        msg.link_name = 'hand_left_palm_link'
         msg.object.id = 'mesh'
         msg.object.header.stamp = rclpy.time.Time().to_msg()
-        msg.object.header.frame_id = 'hand_palm_link'
+        msg.object.header.frame_id = 'hand_left_palm_link'
         msg.object.operation = CollisionObject.ADD
         msg.object.meshes.append(mesh_msg)
         msg.object.mesh_poses.append(geometry.tuples_to_pose(pose))
@@ -622,17 +647,17 @@ class CollisionWorldTest(testing.RosMockTestCase):
         self.assertEqual(len(attached_objects), 1)
         self.assertEqual(attached_objects[0].object.id, 'mesh')
 
-    @raises(ValueError)
     def test_add_attached_mesh_bad_frame_id(self):
-        sub_mock = MagicMock()
-        collision_world = self.create()
-        collision_world._known_obj_ids_sub = sub_mock
+        with self.assertRaises(ValueError):
+            sub_mock = MagicMock()
+            collision_world = self.create()
+            collision_world._known_obj_ids_sub = sub_mock
 
-        pose = geometry.pose(1.0, 2.0, 3.0)
-        collision_world.add_attached_mesh(
-            filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chair.stl'),
-            pose=pose,
-            frame_id='arm_lift_joint')
+            pose = geometry.pose(1.0, 2.0, 3.0)
+            collision_world.add_attached_mesh(
+                filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chair.stl'),
+                pose=pose,
+                frame_id='arm_lift_joint')
 
     def test_add_meshes_success(self):
         collision_world = self.create()
@@ -668,14 +693,14 @@ class CollisionWorldTest(testing.RosMockTestCase):
             msg.mesh_poses.append(geometry.tuples_to_pose(pose))
         pub_mock.publish.assert_called_with(msg)
 
-    @raises(ValueError)
     def test_add_attached_mesh_bad_file_path(self):
-        sub_mock = MagicMock()
-        collision_world = self.create()
-        collision_world._known_obj_ids_sub = sub_mock
+        with self.assertRaises(ValueError):
+            sub_mock = MagicMock()
+            collision_world = self.create()
+            collision_world._known_obj_ids_sub = sub_mock
 
-        pose = geometry.pose(1.0, 2.0, 3.0)
-        collision_world.add_mesh(filename='hoge.stl', pose=pose)
+            pose = geometry.pose(1.0, 2.0, 3.0)
+            collision_world.add_mesh(filename='hoge.stl', pose=pose, frame_id='hand_left_palm_link')
 
     def test_attach(self):
         collision_world = self.create()
@@ -684,7 +709,7 @@ class CollisionWorldTest(testing.RosMockTestCase):
         sub_mock = MagicMock()
         collision_world._environment_sub = sub_mock
         attach_sub_mock = MagicMock()
-        collision_world._attach_info_sub = attach_sub_mock
+        collision_world._attach_info_sub['hand_left_palm_link'] = attach_sub_mock
 
         test_world = PlanningSceneWorld()
         collision_object = CollisionObject()
@@ -704,8 +729,8 @@ class CollisionWorldTest(testing.RosMockTestCase):
         get_clock_mock = self.node_mock.get_clock.return_value
         get_clock_mock.now.return_value = rclpy.time.Time()
 
-        id = collision_world.attach('box')
-        eq_(id, 'box')
+        box_id = collision_world.attach('box', frame_id='hand_left_palm_link')
+        self.assertEqual(box_id, 'box')
         msg = String()
         msg.data = 'box'
         pub_mock.publish.assert_called_with(msg)
@@ -715,14 +740,14 @@ class CollisionWorldTest(testing.RosMockTestCase):
         pub_mock = self.publisher_mock.return_value
 
         sub_mock = MagicMock()
-        collision_world._environment_sub = sub_mock
+        collision_world._attach_info_sub['hand_left_palm_link'] = sub_mock
 
-        test_world = PlanningSceneWorld()
-        collision_object = CollisionObject()
-        collision_object.id = 'box'
-        test_world.collision_objects.append(collision_object)
-        data_mock = PropertyMock(side_effect=[test_world,
-                                              test_world])
+        test_state = RobotState()
+        attached_collision_object = AttachedCollisionObject()
+        attached_collision_object.object.id = 'box'
+        test_state.attached_collision_objects.append(attached_collision_object)
+        data_mock = PropertyMock(side_effect=[test_state,
+                                              RobotState()])
         type(sub_mock).data = data_mock
 
         self.assertTrue(collision_world.release('box'))
@@ -734,40 +759,72 @@ class CollisionWorldTest(testing.RosMockTestCase):
         collision_world = self.create()
         pub_mock = self.publisher_mock.return_value
 
-        sub_mock = MagicMock()
-        collision_world._attach_info_sub = sub_mock
+        sub_mock_left = MagicMock()
+        collision_world._attach_info_sub['hand_left_palm_link'] = sub_mock_left
+        sub_mock_right = MagicMock()
+        collision_world._attach_info_sub['hand_right_palm_link'] = sub_mock_right
 
-        data_mock = PropertyMock(side_effect=[RobotState(),
-                                              RobotState(),
-                                              RobotState()])
-        type(sub_mock).data = data_mock
+        data_mock_left = PropertyMock(side_effect=[RobotState(),
+                                                   RobotState(),
+                                                   RobotState()])
+        type(sub_mock_left).data = data_mock_left
+        data_mock_right = PropertyMock(side_effect=[RobotState(),
+                                                    RobotState(),
+                                                    RobotState()])
+        type(sub_mock_right).data = data_mock_right
 
         self.assertTrue(collision_world.release_all())
-        msg = AttachedCollisionObject()
-        msg.object = CollisionObject()
-        msg.object.operation = CollisionObject.REMOVE
-        msg.link_name = 'hand_palm_link'
-        pub_mock.publish.assert_called_with(msg)
+        msg_left = AttachedCollisionObject()
+        msg_left.object = CollisionObject()
+        msg_left.object.operation = CollisionObject.REMOVE
+        msg_left.link_name = 'hand_left_palm_link'
+        msg_right = AttachedCollisionObject()
+        msg_right.object = CollisionObject()
+        msg_right.object.operation = CollisionObject.REMOVE
+        msg_right.link_name = 'hand_right_palm_link'
+        pub_mock.publish.assert_any_call(msg_left)
+        pub_mock.publish.assert_any_call(msg_right)
 
         attached_objects = collision_world.attached_objects
-        eq_(len(attached_objects), 0)
+        self.assertEqual(len(attached_objects), 0)
+
+    def test_release_all_one_hand(self):
+        collision_world = self.create()
+        pub_mock = self.publisher_mock.return_value
+
+        sub_mock_left = MagicMock()
+        collision_world._attach_info_sub['hand_left_palm_link'] = sub_mock_left
+
+        data_mock_left = PropertyMock(side_effect=[RobotState(),
+                                                   RobotState(),
+                                                   RobotState()])
+        type(sub_mock_left).data = data_mock_left
+
+        self.assertTrue(collision_world.release_all('hand_left_palm_link'))
+        msg_left = AttachedCollisionObject()
+        msg_left.object = CollisionObject()
+        msg_left.object.operation = CollisionObject.REMOVE
+        msg_left.link_name = 'hand_left_palm_link'
+        pub_mock.publish.assert_any_call(msg_left)
+
+        attached_objects = collision_world.attached_objects
+        self.assertEqual(len(attached_objects), 0)
 
     def test_remove(self):
         collision_world = self.create()
         pub_mock = self.publisher_mock.return_value
-        sub_mock = MagicMock()
-        collision_world._environment_sub = sub_mock
 
-        test_world = PlanningSceneWorld()
-        collision_object = CollisionObject()
-        collision_object.id = 'answer'
-        test_world.collision_objects.append(collision_object)
-        data_mock = PropertyMock(side_effect=[PlanningSceneWorld(),
-                                              test_world])
-        type(sub_mock).data = data_mock
+        attach_sub_mock = MagicMock()
+        collision_world._attach_info_sub['hand_left_palm_link'] = attach_sub_mock
 
-        get_clock_mock = self.node_mock.get_clock.return_value
-        get_clock_mock.now.return_value = rclpy.time.Time()
+        test_state1 = RobotState()
+        test_state2 = RobotState()
+        attached_collision_object = AttachedCollisionObject()
+        attached_collision_object.object.id = 'answer'
+        test_state1.attached_collision_objects.append(attached_collision_object)
+        data_mock = PropertyMock(side_effect=[test_state1,
+                                              test_state2])
+        type(attach_sub_mock).data = data_mock
 
         collision_world.remove('answer')
 
@@ -782,18 +839,8 @@ class CollisionWorldTest(testing.RosMockTestCase):
 
     def test_remove_attached_object(self):
         collision_world = self.create()
-        environment_sub_mock = MagicMock()
-        collision_world._environment_sub = environment_sub_mock
         attach_info_sub_mock = MagicMock()
-        collision_world._attach_info_sub = attach_info_sub_mock
-
-        test_world = PlanningSceneWorld()
-        collision_object = CollisionObject()
-        collision_object.id = 'box'
-        test_world.collision_objects.append(collision_object)
-        data_mock = PropertyMock(side_effect=[PlanningSceneWorld(),
-                                              test_world])
-        type(environment_sub_mock).data = data_mock
+        collision_world._attach_info_sub['hand_left_palm_link'] = attach_info_sub_mock
 
         test_state_1 = RobotState()
         test_state_2 = RobotState()
@@ -816,23 +863,31 @@ class CollisionWorldTest(testing.RosMockTestCase):
         get_clock_mock.now.return_value = rclpy.time.Time()
 
         pose = geometry.pose(z=0.025)
-        box_id = collision_world.add_attached_box(x=0.05, y=0.05, z=0.05, pose=pose)
-        eq_(box_id, 'box')
+        box_id = collision_world.add_attached_box(
+            x=0.05,
+            y=0.05,
+            z=0.05,
+            pose=pose,
+            frame_id='hand_left_palm_link')
+        self.assertEqual(box_id, 'box')
 
         pose = geometry.pose(z=0.025)
-        sphere_id = collision_world.add_attached_sphere(radius=0.03, pose=pose)
-        eq_(sphere_id, 'sphere')
+        sphere_id = collision_world.add_attached_sphere(
+            radius=0.03,
+            pose=pose,
+            frame_id='hand_left_palm_link')
+        self.assertEqual(sphere_id, 'sphere')
 
         attached_objects = collision_world.attached_objects
-        eq_(len(attached_objects), 2)
-        eq_(attached_objects[0].object.id, 'box')
-        eq_(attached_objects[1].object.id, 'sphere')
+        self.assertEqual(len(attached_objects), 2)
+        self.assertEqual(attached_objects[0].object.id, 'box')
+        self.assertEqual(attached_objects[1].object.id, 'sphere')
 
         collision_world.remove(box_id)
 
         attached_objects = collision_world.attached_objects
-        eq_(len(attached_objects), 1)
-        eq_(attached_objects[0].object.id, 'sphere')
+        self.assertEqual(len(attached_objects), 1)
+        self.assertEqual(attached_objects[0].object.id, 'sphere')
 
     def test_remove_all(self):
         collision_world = self.create()
@@ -840,7 +895,7 @@ class CollisionWorldTest(testing.RosMockTestCase):
         sub_mock = MagicMock()
         collision_world._environment_sub = sub_mock
         attach_sub_mock = MagicMock()
-        collision_world._attach_info_sub = attach_sub_mock
+        collision_world._attach_info_sub['hand_left_palm_link'] = attach_sub_mock
 
         test_world = PlanningSceneWorld()
         collision_object = CollisionObject()

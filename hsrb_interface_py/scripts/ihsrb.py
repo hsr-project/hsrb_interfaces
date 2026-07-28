@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -29,6 +29,7 @@ import math  # noqa : F401
 from hsrb_interface import geometry  # noqa : F401
 from hsrb_interface import Robot
 from hsrb_interface import robot as _robot
+from hsrb_interface import settings
 from IPython.terminal.embed import InteractiveShellEmbed
 
 import rclpy
@@ -69,7 +70,10 @@ _robot.enable_interactive()
 
 def main(args=None):
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    with Robot() as robot:
+
+    settings.load_settings()
+
+    with Robot(robot_name='hsrb') as robot:
         whole_body = robot.try_get('whole_body')  # noqa : F841
         omni_base = robot.try_get('omni_base')  # noqa : F841
         collision_world = robot.try_get('global_collision_world')  # noqa : F841

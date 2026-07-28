@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -26,11 +26,6 @@
 # vim: fileencoding=utf-8
 """Text-to-speech interface"""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 from tmc_voice_msgs.msg import Voice
 
 from . import exceptions
@@ -42,7 +37,6 @@ class TextToSpeech(robot.Item):
     """Abstract interface for text-to-speech service
 
     Examples:
-
         .. sourcecode:: python
 
             with Robot() as robot:

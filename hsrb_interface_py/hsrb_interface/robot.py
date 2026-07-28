@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -27,10 +27,6 @@
 """This module provides classes and functions to manage connections to robots.
 
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 import enum
 import importlib
@@ -99,7 +95,7 @@ def _type_deprecation_warning(name, typ):
     """Warn uses of ItemType feature."""
     if typ is not None:
         msg = "A feature specifying an item by ItemType is deprecated."
-        warnings.warn(msg, exceptions.DeprecationWarning)
+        warnings.warn(msg, exceptions.HsrbInterfaceDeprecationWarning)
     if name == "default":
         if typ is ItemTypes.TEXT_TO_SPEECH:
             return "default_tts"
@@ -112,7 +108,7 @@ _interactive = False
 
 
 def _is_interactive():
-    """True if interactive mode is set.
+    """Return true if interactive mode is set.
 
     Returns:
         bool: Is interactive mode enabled or not.
@@ -147,12 +143,12 @@ class _ConnectionManager(Node):
 
     """
 
-    def __init__(self, use_tf_client=False):
+    def __init__(self, robot_name='hsrb', use_tf_client=False):
         """See class docstring."""
         context = rclpy.utilities.get_default_context()
         if not context.ok():
             rclpy.init()
-        super().__init__('hsrb_interface_py')
+        super().__init__(robot_name + '_interface_py')
         if use_tf_client:
             self._tf2_buffer = tf2_ros.BufferClient('/tf2_buffer_server')
         else:
@@ -170,14 +166,14 @@ class _ConnectionManager(Node):
     def tf2_buffer(self):
         return weakref.proxy(self._tf2_buffer)
 
-    def list(self, typ=None):
+    def itemlist(self, typ=None):
         """List available items.
 
         Args:
             typ (ItemTypes):
         """
         if typ is None:
-            targets = [x for x in ItemTypes]
+            targets = list(ItemTypes)
         else:
             targets = [typ]
         results = []
@@ -216,9 +212,12 @@ class _ConnectionManager(Node):
             return self._registry.get(key, None)
         else:
             config = settings.get_entry(typ.value, name)
-            module_name, class_name = config["class"]
-            module = importlib.import_module(".{0}".format(module_name),
-                                             "hsrb_interface")
+            if len(config["class"]) > 2:
+                module_name, class_name, package_name = config["class"]
+            else:
+                module_name, class_name = config["class"]
+                package_name = "hsrb_interface"
+            module = importlib.import_module(".{0}".format(module_name), package_name)
             cls = getattr(module, class_name)
             obj = cls(name)
             self._registry[key] = obj
@@ -250,7 +249,7 @@ class Robot(object):
 
            from hsrb_interface import Robot, ItemTypes
                 with Robot() as robot:
-                    print(robot.list())
+                    print(robot.itemlist())
                     whole_body = robot.get("whole_body")
     """
 
@@ -264,7 +263,7 @@ class Robot(object):
             This class is deprecated. It will be removed in future release.
         """
         msg = "A feature specifying a resource item by ItemType is deprecated."
-        warnings.warn(msg, exceptions.DeprecationWarning)
+        warnings.warn(msg, exceptions.HsrbInterfaceDeprecationWarning)
         return ItemTypes
 
     @classmethod
@@ -275,7 +274,7 @@ class Robot(object):
     def connecting(cls):
         """Check whether the connection to a robot is valid."""
         warnings.warn("Robot.connectiong() is depreacated",
-                      exceptions.DeprecationWarning)
+                      exceptions.HsrbInterfaceDeprecationWarning)
         return cls._connecting()
 
     @classmethod
@@ -292,8 +291,9 @@ class Robot(object):
     def __init__(self, *args, **kwargs):
         """See class docstring."""
         use_tf_client = kwargs.get('use_tf_client', False)
+        self._robot_name = kwargs.get('robot_name', 'hsrb')
         if Robot._connection is None:
-            self._conn = _ConnectionManager(use_tf_client=use_tf_client)
+            self._conn = _ConnectionManager(robot_name=self._robot_name, use_tf_client=use_tf_client)
             Robot._connection = self._conn
         else:
             self._conn = Robot._connection
@@ -303,11 +303,11 @@ class Robot(object):
         self.__exit__(None, None, None)
 
     def __enter__(self):
-        """A part of ContextManager interface."""
+        """Use as a part of ContextManager interface."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """A part of ContextManager interface."""
+        """Use as a part of ContextManager interface."""
         self._conn.destroy_node()
         self._conn = None
         Robot._connection = None
@@ -321,10 +321,10 @@ class Robot(object):
         return self._conn is not None
 
     def _get_name(self):
-        return settings.get_entry('robot', 'hsrb')['fullname']
+        return settings.get_entry('robot', self._robot_name)['fullname']
     name = property(_get_name)
 
-    def list(self, typ=None):
+    def itemlist(self, typ=None):
         """List available items up.
 
         Args:
@@ -340,8 +340,8 @@ class Robot(object):
         """
         if typ is not None:
             msg = """A feature specifying an item by ItemType is deprecated."""
-            warnings.warn(msg, exceptions.DeprecationWarning)
-        return self._conn.list(typ)
+            warnings.warn(msg, exceptions.HsrbInterfaceDeprecationWarning)
+        return self._conn.itemlist(typ)
 
     def get(self, name, typ=None):
         """Get an item if available.

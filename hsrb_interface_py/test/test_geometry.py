@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -28,14 +28,15 @@
 """Unittest for hsrb_interface_py.geometry module"""
 
 import math
+import unittest
 
 from hsrb_interface import geometry
-from nose.tools import eq_
 
 
-def test_shortest_angular_distance():
-    """Test geometry.shortest_angular_distance function"""
-    eq_(math.pi, geometry.shortest_angular_distance(0.0, math.pi))
-    eq_(math.pi / 2.0, geometry.shortest_angular_distance(0.0, math.pi / 2.0))
-    eq_(-math.pi / 2.0,
-        geometry.shortest_angular_distance(0.0, math.pi / 2.0 * 3.0))
+class GeometryTest(unittest.TestCase):
+
+    def test_shortest_angular_distance(self):
+        """Test geometry.shortest_angular_distance function"""
+        self.assertEqual(math.pi, geometry.shortest_angular_distance(0.0, math.pi))
+        self.assertEqual(math.pi / 2.0, geometry.shortest_angular_distance(0.0, math.pi / 2.0))
+        self.assertEqual(-math.pi / 2.0, geometry.shortest_angular_distance(0.0, math.pi / 2.0 * 3.0))

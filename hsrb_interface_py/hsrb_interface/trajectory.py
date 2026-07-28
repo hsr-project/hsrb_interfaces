@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -25,11 +25,6 @@
 # DAMAGE.
 # vim: fileencoding=utf-8
 """This module classes and functions that manipulate joint trajectories"""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 import copy
 from itertools import repeat
@@ -166,33 +161,6 @@ def merge(target, source):
     return merged
 
 
-def timeopt_filter(base_trajectory, node):
-    """Apply timeopt filter to a omni-base trajectory.
-
-    Args:
-        joint_trajectory (trajectory_msgs.msg.JointTrajectory):
-            A trajectory that will be applied this filter
-    Returns:
-        trajectory_msgs.msg.JointTrajectory:
-            Filtered trajectory
-    """
-    service = settings.get_entry("trajectory", "timeopt_filter_service")
-    filter_service = node.create_client(FilterJointTrajectory, service)
-    req = FilterJointTrajectory.Request()
-    req.trajectory = base_trajectory
-    try:
-        future = filter_service.call_async(req)
-        rclpy.spin_until_future_complete(node, future)
-        res = future.result()
-        if not res.is_success:
-            return None
-    except Exception:
-        traceback.print_exc()
-        raise
-    filtered_traj = res.trajectory
-    return filtered_traj
-
-
 def hsr_timeopt_filter(merged_trajectory, start_state, node):
     """Whole body timeopt filter.
 
@@ -307,6 +275,7 @@ class TrajectoryController(robot.Item):
         self._controller_name = controller_name
         action = controller_name + "/follow_joint_trajectory"
         self._client = ActionClient(self._node, FollowJointTrajectory, action)
+        self._send_goal_future = None
         timeout = settings.get_entry('trajectory', 'action_timeout')
         self._client.wait_for_server(timeout)
         param_name = "{0}".format(
@@ -327,8 +296,8 @@ class TrajectoryController(robot.Item):
 
     def cancel(self):
         """Cancel a current goal."""
-        goal_handle = self._send_goal_future.result()
-        goal_handle.cancel_goal_async()
+        if self._send_goal_future is not None:
+            self._send_goal_future.result().cancel_goal_async()
 
     def get_state(self):
         """Get a status of the action client"""
@@ -340,22 +309,13 @@ class TrajectoryController(robot.Item):
         if res is None:
             return action_msgs.GoalStatus.STATUS_EXECUTING
         else:
-            return res.status
+            return utils.get_action_state(self._node, self._send_goal_future, 0.1)
 
     def get_status_text(self):
         """Get a goal status text of the action client"""
-        status_strings = {
-            action_msgs.GoalStatus.STATUS_UNKNOWN: "STATUS_UNKNOWN",  # noqa
-            action_msgs.GoalStatus.STATUS_ACCEPTED: "STATUS_ACCEPTED",  # noqa
-            action_msgs.GoalStatus.STATUS_EXECUTING: "STATUS_EXECUTING",  # noqa
-            action_msgs.GoalStatus.STATUS_CANCELING: "STATUS_CANCELING",  # noqa
-            action_msgs.GoalStatus.STATUS_SUCCEEDED: "STATUS_SUCCEEDED",  # noqa
-            action_msgs.GoalStatus.STATUS_CANCELED: "STATUS_CANCELED",  # noqa
-            action_msgs.GoalStatus.STATUS_ABORTED: "STATUS_ABORTED"  # noqa
-        }
         future = self._client._async()
         result_status = future.result().status
-        return status_strings[result_status]
+        return utils.get_action_state_text(result_status)
 
     def get_result(self):
         """Get a result of a current goal.
@@ -377,6 +337,9 @@ class TrajectoryController(robot.Item):
         return result
 
     def get_result_async(self):
+        if self._send_goal_future is None:
+            return None
+
         goal_handle = self._send_goal_future.result()
         return goal_handle.get_result_async()
 

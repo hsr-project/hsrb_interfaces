@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -26,16 +26,12 @@
 # vim: fileencoding=utf-8
 """Utility classes and functions"""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import asyncio
 import copy
 import threading
 import time
 
+import action_msgs.msg as action_msgs
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
 import rclpy
@@ -205,7 +201,7 @@ def get_transform(node, tf2_buffer, target_frame, source_frame, timeout=None):
 
     wait_until_complete(node, tf_future, timeout)
 
-    # Get the latest obtainable tf
+    # Retrieve the latest available tf
     transform = asyncio.run(tf2_buffer.lookup_transform_async(
         target_frame=target_frame,
         source_frame=source_frame,
@@ -213,3 +209,28 @@ def get_transform(node, tf2_buffer, target_frame, source_frame, timeout=None):
     ))
 
     return transform
+
+
+def get_action_state(node, future, timeout=0.1):
+    """Get a status of the action client"""
+    goal_handle = future.result()
+    get_result_future = goal_handle.get_result_async()
+    rclpy.spin_until_future_complete(node, get_result_future, timeout_sec=timeout)
+    res = get_result_future.result()
+    if res is None:
+        return action_msgs.GoalStatus.STATUS_EXECUTING
+    else:
+        return res.status
+
+
+def get_action_state_text(status):
+    status_strings = {
+        action_msgs.GoalStatus.STATUS_UNKNOWN: "STATUS_UNKNOWN",  # noqa
+        action_msgs.GoalStatus.STATUS_ACCEPTED: "STATUS_ACCEPTED",  # noqa
+        action_msgs.GoalStatus.STATUS_EXECUTING: "STATUS_EXECUTING",  # noqa
+        action_msgs.GoalStatus.STATUS_CANCELING: "STATUS_CANCELING",  # noqa
+        action_msgs.GoalStatus.STATUS_SUCCEEDED: "STATUS_SUCCEEDED",  # noqa
+        action_msgs.GoalStatus.STATUS_CANCELED: "STATUS_CANCELED",  # noqa
+        action_msgs.GoalStatus.STATUS_ABORTED: "STATUS_ABORTED"  # noqa
+    }
+    return status_strings[status]

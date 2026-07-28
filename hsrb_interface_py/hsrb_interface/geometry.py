@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -30,11 +30,6 @@ Notes:
     At present, this module does not provide adequate features for serious
     usage. Please consider using other libraries for such kind of task.
 """
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 import collections
 import math
@@ -80,7 +75,7 @@ def create_pose(x=0.0, y=0.0, z=0.0, ei=0.0, ej=0.0, ek=0.0, axes='sxyz'):
         This function is deprecated. Use :py:func:`pose()` instead.
     """
     warnings.warn('create_pose() is deprecated. Use pose() instead.',
-                  exceptions.DeprecationWarning)
+                  exceptions.HsrbInterfaceDeprecationWarning)
     return pose(x, y, z, ei, ej, ek, axes)
 
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -24,66 +24,67 @@
 # OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 # DAMAGE.
 """Unittest hsrb_interface.robot module."""
+import unittest
 from unittest.mock import patch
 
 import hsrb_interface
 import hsrb_interface.robot
 
-from nose.tools import eq_
-from nose.tools import ok_
-from nose.tools import raises
 
+class RobotTest(unittest.TestCase):
 
-@raises(hsrb_interface.exceptions.RobotConnectionError)
-def test_resource():
-    """Test resource acquisition."""
-    robot = hsrb_interface.robot.Item()
-    ok_(robot)
+    def setUp(self):
+        patcher = patch('tf2_ros.TransformListener')
+        self.listener_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
+        patcher = patch('tf2_ros.Buffer')
+        self.buffer_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
-@patch('tf2_ros.TransformListener')
-@patch('tf2_ros.Buffer')
-@patch('rclpy.node.Node.__init__')
-@patch('rclpy.node.Node.destroy_node')
-def test_robot_lifecycle_close(mock_destroy, mock_init,
-                               mock_buffer, mock_listener):
-    """Test basic lifecycle"""
-    ok_(mock_buffer)
-    ok_(mock_listener)
-    robot = hsrb_interface.Robot()
-    mock_init.assert_called_with('hsrb_interface_py')
-    eq_(robot.ok(), True)
-    robot.close()
-    mock_destroy.assert_called()
-    eq_(robot.ok(), False)
+        patcher = patch('tf2_ros.BufferClient')
+        self.buffer_client_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
+        patcher = patch('rclpy.node.Node.__init__')
+        self.init_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
-@patch('tf2_ros.TransformListener')
-@patch('tf2_ros.Buffer')
-@patch('rclpy.node.Node.__init__')
-@patch('rclpy.node.Node.destroy_node')
-def test_robot_lifecycle(mock_destroy, mock_init,
-                         mock_buffer, mock_listener):
-    """Test use in with statement"""
-    ok_(mock_buffer)
-    ok_(mock_listener)
-    with hsrb_interface.Robot() as robot:
-        eq_(robot.ok(), True)
-        mock_init.assert_called_with('hsrb_interface_py')
-    mock_destroy.assert_called()
+        patcher = patch('rclpy.node.Node.destroy_node')
+        self.destroy_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
+    def test_resource(self):
+        """Test resource acquisition."""
+        with self.assertRaises(hsrb_interface.exceptions.RobotConnectionError):
+            robot = hsrb_interface.robot.Item()
+            assert robot
 
-@patch('tf2_ros.TransformListener')
-@patch('tf2_ros.Buffer')
-@patch('tf2_ros.BufferClient')
-@patch('rclpy.node.Node.__init__')
-@patch('rclpy.node.Node.destroy_node')
-def test_robot_with_tf_client(mock_destroy, mock_init,
-                              mock_buffer_client, mock_buffer, mock_listener):
-    """Test use in tf client"""
-    with hsrb_interface.Robot(use_tf_client=True) as robot:
-        eq_(robot.ok(), True)
-        mock_buffer.assert_not_called()
-        mock_listener.assert_not_called()
+    def test_robot_lifecycle_close(self):
+        """Test basic lifecycle"""
+        assert self.buffer_mock
+        assert self.listener_mock
+        robot = hsrb_interface.Robot()
+        self.init_mock.assert_called_with('hsrb_interface_py')
+        self.assertTrue(robot.ok())
+        robot.close()
+        self.destroy_mock.assert_called()
+        self.assertFalse(robot.ok())
 
-    mock_destroy.assert_called()
+    def test_robot_lifecycle(self):
+        """Test use in with statement"""
+        assert self.buffer_mock
+        assert self.listener_mock
+        with hsrb_interface.Robot() as robot:
+            self.assertTrue(robot.ok())
+            self.init_mock.assert_called_with('hsrb_interface_py')
+        self.destroy_mock.assert_called()
+
+    def test_robot_with_tf_client(self):
+        """Test use in tf client"""
+        with hsrb_interface.Robot(use_tf_client=True) as robot:
+            self.assertTrue(robot.ok())
+            self.buffer_mock.assert_not_called()
+            self.listener_mock.assert_not_called()
+
+        self.destroy_mock.assert_called()

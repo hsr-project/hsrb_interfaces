@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -26,14 +26,9 @@
 # vim: fileencoding=utf-8
 """Collision checking interface."""
 
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import os
 import time
+import warnings
 
 from geometry_msgs.msg import Point
 from hsrb_interface import geometry
@@ -55,11 +50,15 @@ from shape_msgs.msg import (
     SolidPrimitive,
 )
 from std_msgs.msg import String
-from stl import mesh
 
 from . import robot
 from . import settings
 from . import utils
+
+# To suppress FutureWarning from numpy caused by importing mesh
+with warnings.catch_warnings():
+    warnings.filterwarnings('ignore', category=FutureWarning, module='importlib._bootstrap')
+    from stl import mesh
 
 # Timeout to wait for message [sec]
 _WAIT_TOPIC_TIMEOUT = 3.0
@@ -98,30 +97,44 @@ class CollisionWorld(robot.Item):
             PlanningSceneWorld,
             default=PlanningSceneWorld()
         )
-        self._attaching_pub = self._node.create_publisher(String,
-                                                          self._setting['attaching_topic'],
-                                                          100)
-        self._add_attaching_pub = self._node.create_publisher(AttachedCollisionObject,
-                                                              self._setting['add_attaching_topic'],
-                                                              100)
-        self._releasing_pub = self._node.create_publisher(String,
-                                                          self._setting['releasing_topic'],
-                                                          100)
-        self._attach_info_sub = utils.CachingSubscriber(
-            self._setting['attached_info_topic'],
-            RobotState,
-            default=RobotState()
-        )
         self._trans_env_sub.wait_for_message(_WAIT_TOPIC_TIMEOUT)
+
+        self._attaching_pub = {}
+        self._add_attaching_pub = {}
+        self._releasing_pub = {}
+        self._attach_info_sub = {}
+
+        for frame_id in self._setting["attached_object"].keys():
+            self._attaching_pub[frame_id] = self._node.create_publisher(
+                String,
+                self._setting["attached_object"][frame_id]['attaching_topic'],
+                100
+            )
+            self._add_attaching_pub[frame_id] = self._node.create_publisher(
+                AttachedCollisionObject,
+                self._setting["attached_object"][frame_id]['add_attaching_topic'],
+                100
+            )
+            self._releasing_pub[frame_id] = self._node.create_publisher(
+                String,
+                self._setting["attached_object"][frame_id]['releasing_topic'],
+                100
+            )
+            self._attach_info_sub[frame_id] = utils.CachingSubscriber(
+                self._setting["attached_object"][frame_id]['attached_info_topic'],
+                RobotState,
+                default=RobotState()
+            )
+            self._attach_info_sub[frame_id].wait_for_message(_WAIT_TOPIC_TIMEOUT)
 
     def _is_object_id_used(self, object_id):
         """Check if a given object ID is used or not"""
         known_ids = [x.id for x in self._environment_sub.data.collision_objects]
         return object_id in known_ids
 
-    def _is_object_id_attached(self, object_id):
+    def _is_object_id_attached(self, frame_id, object_id):
         """Check if a given object ID is attached or not"""
-        known_ids = [x.object.id for x in self._attach_info_sub.data.attached_collision_objects]
+        known_ids = [x.object.id for x in self._attach_info_sub[frame_id].data.attached_collision_objects]
         return object_id in known_ids
 
     def _create_collision_object(self, obj, pose, name, frame_id):
@@ -169,11 +182,11 @@ class CollisionWorld(robot.Item):
             mesh_msg.triangles.append(triangle)
         return mesh_msg
 
-    def _wait_object_id_used(self, id, timeout=1.0):
+    def _wait_object_id_used(self, object_id, timeout=1.0):
         timeout_sec = timeout
         while rclpy.ok() and timeout_sec > 0.0:
             rclpy.spin_once(self._node)
-            if self._is_object_id_used(id):
+            if self._is_object_id_used(object_id):
                 return True
 
             time.sleep(0.01)
@@ -181,11 +194,11 @@ class CollisionWorld(robot.Item):
 
         return False
 
-    def _wait_object_id_attached(self, id, timeout=1.0):
+    def _wait_object_id_attached(self, frame_id, object_id, timeout=1.0):
         timeout_sec = timeout
         while rclpy.ok() and timeout_sec > 0.0:
             rclpy.spin_once(self._node)
-            if self._is_object_id_attached(id):
+            if self._is_object_id_attached(frame_id, object_id):
                 return True
 
             time.sleep(0.01)
@@ -193,11 +206,11 @@ class CollisionWorld(robot.Item):
 
         return False
 
-    def _wait_object_id_released(self, id, timeout=1.0):
+    def _wait_object_id_released(self, frame_id, object_id, timeout=1.0):
         timeout_sec = timeout
         while rclpy.ok() and timeout_sec > 0.0:
             rclpy.spin_once(self._node)
-            if not self._is_object_id_attached(id):
+            if not self._is_object_id_attached(frame_id, object_id):
                 return True
 
             time.sleep(0.01)
@@ -205,11 +218,11 @@ class CollisionWorld(robot.Item):
 
         return False
 
-    def _wait_object_id_released_all(self, timeout=1.0):
+    def _wait_object_id_released_all(self, frame_id, timeout=1.0):
         timeout_sec = timeout
         while rclpy.ok() and timeout_sec > 0.0:
             rclpy.spin_once(self._node)
-            if len(self._attach_info_sub.data.attached_collision_objects) == 0:
+            if len(self._attach_info_sub[frame_id].data.attached_collision_objects) == 0:
                 return True
 
             time.sleep(0.01)
@@ -218,12 +231,12 @@ class CollisionWorld(robot.Item):
         return False
 
     def _add_object(self, obj, pose, name, frame_id, timeout):
-        object = self._create_collision_object(obj, pose, name, frame_id)
-        self._object_pub.publish(object)
+        collision_object = self._create_collision_object(obj, pose, name, frame_id)
+        self._object_pub.publish(collision_object)
 
         # Wait until it is reflected
-        if self._wait_object_id_used(object.id, timeout):
-            return object.id
+        if self._wait_object_id_used(collision_object.id, timeout):
+            return collision_object.id
         else:
             return None
 
@@ -231,13 +244,20 @@ class CollisionWorld(robot.Item):
         attached_object = AttachedCollisionObject()
         attached_object.object = self._create_collision_object(obj, pose, name, frame_id)
         attached_object.link_name = frame_id
-        self._add_attaching_pub.publish(attached_object)
+        self._add_attaching_pub[frame_id].publish(attached_object)
 
         # Wait until it is reflected
-        if self._wait_object_id_attached(attached_object.object.id, timeout):
+        if self._wait_object_id_attached(frame_id, attached_object.object.id, timeout):
             return attached_object.object.id
         else:
             return None
+
+    def _check_end_effector_frames(self, frame_id):
+        end_effector_frame_list = self._setting["attached_object"].keys()
+        if frame_id not in end_effector_frame_list:
+            raise ValueError(f'{frame_id} is not included in [{", ".join(end_effector_frame_list)}]')
+
+        return True
 
     def _get_ref_frame_id(self):
         return self._ref_frame_id
@@ -255,7 +275,11 @@ class CollisionWorld(robot.Item):
     @property
     def attached_objects(self):
         """List (AttachedCollisionObject): A latest List of a attaced objects."""
-        return self._attach_info_sub.data.attached_collision_objects
+        object_list = []
+        for frame_id in self._setting["attached_object"].keys():
+            object_list.extend(self._attach_info_sub[frame_id].data.attached_collision_objects)
+
+        return object_list
 
     def snapshot(self, ref_frame_id=None):
         """Get a snapshot of collision space from present environment.
@@ -291,7 +315,7 @@ class CollisionWorld(robot.Item):
             raise RuntimeError("Cannot set frame_id")
 
         # Subscribe to transformed_environment
-        self._trans_env_sub.wait_for_message(_WAIT_TOPIC_TIMEOUT)
+        self._trans_env_sub.wait_for_message()
         return self._trans_env_sub.data
 
     def add_box(self, x=0.1, y=0.1, z=0.1, pose=geometry.pose(),
@@ -311,7 +335,7 @@ class CollisionWorld(robot.Item):
         Returns:
             Tuple[int, str]: ID and name of an added object.
         """
-        # Create CollisionObject
+        # Create a CollisionObject
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.BOX
         shape.dimensions = [x, y, z]
@@ -338,14 +362,12 @@ class CollisionWorld(robot.Item):
         Raises:
             ValueError: frame_id is not end effector frame.
         """
-        if frame_id not in settings.get_entry('joint_group', 'whole_body')['end_effector_frames']:
-            raise ValueError("frame_id is not end effector frame.")
+        if self._check_end_effector_frames(frame_id):
+            shape = SolidPrimitive()
+            shape.type = SolidPrimitive.BOX
+            shape.dimensions = [x, y, z]
 
-        shape = SolidPrimitive()
-        shape.type = SolidPrimitive.BOX
-        shape.dimensions = [x, y, z]
-
-        return self._add_attached_object(shape, pose, name, frame_id, timeout)
+            return self._add_attached_object(shape, pose, name, frame_id, timeout)
 
     def add_sphere(self, radius=0.1, pose=geometry.pose(),
                    frame_id='map', name='sphere', timeout=1.0):
@@ -386,14 +408,12 @@ class CollisionWorld(robot.Item):
         Raises:
             ValueError: frame_id is not end effector frame.
         """
-        if frame_id not in settings.get_entry('joint_group', 'whole_body')['end_effector_frames']:
-            raise ValueError("frame_id is not end effector frame.")
+        if self._check_end_effector_frames(frame_id):
+            shape = SolidPrimitive()
+            shape.type = SolidPrimitive.SPHERE
+            shape.dimensions = [radius]
 
-        shape = SolidPrimitive()
-        shape.type = SolidPrimitive.SPHERE
-        shape.dimensions = [radius]
-
-        return self._add_attached_object(shape, pose, name, frame_id, timeout)
+            return self._add_attached_object(shape, pose, name, frame_id, timeout)
 
     def add_cylinder(self, radius=0.1, length=0.1, pose=geometry.pose(),
                      frame_id='map', name='cylinder', timeout=1.0):
@@ -411,7 +431,7 @@ class CollisionWorld(robot.Item):
         Returns:
             Tuple[int, str]: ID and name of an added object.
         """
-        # Create CollisionObject
+        # Create a CollisionObject
         shape = SolidPrimitive()
         shape.type = SolidPrimitive.CYLINDER
         shape.dimensions = [length, radius]
@@ -437,14 +457,12 @@ class CollisionWorld(robot.Item):
         Raises:
             ValueError: frame_id is not end effector frame.
         """
-        if frame_id not in settings.get_entry('joint_group', 'whole_body')['end_effector_frames']:
-            raise ValueError("frame_id is not end effector frame.")
+        if self._check_end_effector_frames(frame_id):
+            shape = SolidPrimitive()
+            shape.type = SolidPrimitive.CYLINDER
+            shape.dimensions = [length, radius]
 
-        shape = SolidPrimitive()
-        shape.type = SolidPrimitive.CYLINDER
-        shape.dimensions = [length, radius]
-
-        return self._add_attached_object(shape, pose, name, frame_id, timeout)
+            return self._add_attached_object(shape, pose, name, frame_id, timeout)
 
     def add_mesh(self, filename, pose=geometry.pose(), frame_id='map', name='mesh', timeout=1.0):
         """Add a mesh object to the collision space.
@@ -494,40 +512,41 @@ class CollisionWorld(robot.Item):
             ValueError: A file does not exist.
             ValueError: frame_id is not end effector frame.
         """
-        if frame_id not in settings.get_entry('joint_group', 'whole_body')['end_effector_frames']:
-            raise ValueError("frame_id is not end effector frame.")
+        if self._check_end_effector_frames(frame_id):
+            mesh_obj = self._create_mesh(filename)
 
-        mesh_obj = self._create_mesh(filename)
+            return self._add_attached_object(mesh_obj, pose, name, frame_id, timeout)
 
-        return self._add_attached_object(mesh_obj, pose, name, frame_id, timeout)
-
-    def attach(self, object_id, timeout=1.0):
+    def attach(self, object_id, frame_id='hand_palm_link', timeout=1.0):
         """Attach a specified object from the existing object.
 
         Args:
             object_id (string): A known object ID
+            frame_id: A reference end effector frame of attaching object.
             timeout (float): Wait attached object list for this value [sec]
 
         Returns:
             name (str): A name of an attached object.
 
         Raises:
+            ValueError: frame_id is not end effector frame.
             ValueError: object_id does not exist.
         """
-        if not self._is_object_id_used(object_id):
-            raise ValueError("object_id is not used")
+        if self._check_end_effector_frames(frame_id):
+            if not self._is_object_id_used(object_id):
+                raise ValueError("object_id is not used")
 
-        for collision_object in self._environment_sub.data.collision_objects:
-            if collision_object.id == object_id:
-                object_info = String()
-                object_info.data = object_id
-                self._attaching_pub.publish(object_info)
+            for collision_object in self._environment_sub.data.collision_objects:
+                if collision_object.id == object_id:
+                    object_info = String()
+                    object_info.data = object_id
+                    self._attaching_pub[frame_id].publish(object_info)
 
-                # Wait until it is reflected
-                if self._wait_object_id_attached(object_id, timeout):
-                    return object_id
-                else:
-                    return None
+                    # Wait until it is reflected
+                    if self._wait_object_id_attached(frame_id, object_id, timeout):
+                        return object_id
+                    else:
+                        return None
 
     def release(self, object_id, timeout=1.0):
         """Release a specified object from the attached object.
@@ -539,30 +558,58 @@ class CollisionWorld(robot.Item):
         Returns:
             result (bool): Result of release process.
         """
+        # Determine the frame ID holding the object
+        frame_id = ''
+        for gripper_frame_id in self._setting["attached_object"].keys():
+            if self._is_object_id_attached(gripper_frame_id, object_id):
+                frame_id = gripper_frame_id
+                break
+
+        # If there is no frame ID, it means the object is not being held, so mark it as successful
+        if not frame_id:
+            return True
+
         object_info = String()
         object_info.data = object_id
-        self._releasing_pub.publish(object_info)
+        self._releasing_pub[frame_id].publish(object_info)
 
         # Wait until it is reflected
-        return self._wait_object_id_released(object_id, timeout)
+        return self._wait_object_id_released(frame_id, object_id, timeout)
 
-    def release_all(self, timeout=1.0):
+    def release_all(self, frame_id='', timeout=1.0):
         """Release a specified object from the attached object.
 
         Args:
+            frame_id (string): A reference end effector frame of attaching object.
             timeout (float): Wait attached object list for this value [sec]
 
         Returns:
             result (bool): Result of release process.
-        """
-        attached_object = AttachedCollisionObject()
-        attached_object.object = CollisionObject()
-        attached_object.object.operation = CollisionObject.REMOVE
-        attached_object.link_name = 'hand_palm_link'
-        self._add_attaching_pub.publish(attached_object)
 
-        # Wait until it is reflected
-        return self._wait_object_id_released_all(timeout)
+        Raises:
+            ValueError: frame_id is not end effector frame.
+        """
+        end_effector_frames = []
+        if not frame_id:
+            # If frame_id is empty, release all objects
+            end_effector_frames = self._setting["attached_object"].keys()
+        else:
+            # Release all objects from the hand specified by frame_id
+            if self._check_end_effector_frames(frame_id):
+                end_effector_frames.append(frame_id)
+
+        for end_effector_frame_id in end_effector_frames:
+            attached_object = AttachedCollisionObject()
+            attached_object.object = CollisionObject()
+            attached_object.object.operation = CollisionObject.REMOVE
+            attached_object.link_name = end_effector_frame_id
+            self._add_attaching_pub[end_effector_frame_id].publish(attached_object)
+
+            # Wait until it is reflected
+            if not self._wait_object_id_released_all(end_effector_frame_id, timeout):
+                return False
+
+        return True
 
     def remove(self, object_id, timeout=1.0):
         """Remove a specified object from the collision space.
@@ -589,9 +636,9 @@ class CollisionWorld(robot.Item):
         Returns:
             None
         """
-        self.release_all(timeout)
+        self.release_all(frame_id='', timeout=timeout)
 
         known_ids = [x.id for x in self._environment_sub.data.collision_objects]
 
         for known_id in known_ids:
-            self.remove(known_id)
+            self.remove(known_id, timeout)

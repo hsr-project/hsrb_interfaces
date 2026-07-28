@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 All rights reserved.
 Redistribution and use in source and binary forms, with or without
 modification, are permitted (subject to the limitations in the disclaimer
@@ -37,13 +37,13 @@ namespace bp = boost::python;
 namespace {
 // Joint name for the head Yaw joint
 const char* const kHeadYawJoint = "head_pan_joint";
-// Joint name for the head pitch joint
+// Joint name for the head Pitch joint
 const char* const kHeadPitchJoint = "head_tilt_joint";
 }  // namespace
 
 namespace hsrb_interface_plugin {
 
-/// Kinematics interface, only implements head joint angle calculation to direct gaze at any coordinates
+/// Kinematics interface, only implements head joint angle calculation to direct gaze at arbitrary coordinates
 class KinematicsInterface {
  public:
   /// Constructor
@@ -57,8 +57,8 @@ class KinematicsInterface {
                                               head_joint_names));
   }
 
-  /// Calculates the head joint angles to look at a given location
-  /// @param[in] baselink_to_point Gaze point coordinates relative to the robot, [x, y, z]
+  /// Calculates head joint angles to look at the given location
+  /// @param[in] baselink_to_point Gaze point coordinates relative to the robot base, [x, y, z]
   /// @param[in] camera_frame Frame name of the target camera
   /// @return boost::python::dict Head pan-tilt joint angles
   ///                             Returns an empty dictionary if the calculation fails
@@ -71,8 +71,8 @@ class KinematicsInterface {
         static_cast<double>(bp::extract<double>(baselink_to_point[0])),
         static_cast<double>(bp::extract<double>(baselink_to_point[1])),
         static_cast<double>(bp::extract<double>(baselink_to_point[2])));
-    // The third argument current_joint_state can be empty for the head configuration of HSR-B
-    // head_joint_state is rounded to the limit value if it exceeds the joint angle limits
+    // The third argument current_joint_state is sufficient to be empty for the HSR-B head configuration
+    // head_joint_state is rounded to the limit value if it exceeds the joint angle limit
     tmc_manipulation_types::JointState head_joint_state;
     if (!head_kinematics_->CalculateAngleToGazePoint(
             target, camera_frame,

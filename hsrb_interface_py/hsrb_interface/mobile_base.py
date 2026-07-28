@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -25,11 +25,6 @@
 # DAMAGE.
 # vim: fileencoding=utf-8
 """Provide abstract inteface for a mobile base."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 import math
 import warnings
@@ -111,7 +106,6 @@ class MobileBase(robot.Item):
                 If not specified, deafult is 0 and wait forever.
             ref_frame_id (str):
                 A reference frame of a goal. Default is ``map`` frame.
-
         Examples:
             .. sourcecode:: python
 
@@ -133,7 +127,6 @@ class MobileBase(robot.Item):
             yaw (float): Yaw position on ``robot`` frame [rad]
             timeout (float): Timeout until movement finish [sec].
                 Default is 0.0 and wait forever.
-
         Examples:
             .. sourcecode:: python
 
@@ -156,7 +149,6 @@ class MobileBase(robot.Item):
             yaw (float): Yaw position on ``map`` frame [rad]
             timeout (float): Timeout until movement finish [sec].
                 Default is 0.0 and wait forever.
-
         Examples:
             .. sourcecode:: python
 
@@ -186,7 +178,7 @@ class MobileBase(robot.Item):
         """
         msg = ' '.join(["MobileBase.move() is depreacated."
                         "Use MobileBase.go_pose() instead."])
-        warnings.warn(msg, exceptions.DeprecationWarning)
+        warnings.warn(msg, exceptions.HsrbInterfaceDeprecationWarning)
         self.go_pose(pose, timeout, ref_frame_id)
 
     def go(self, x, y, yaw, timeout=0.0, relative=False):
@@ -208,22 +200,13 @@ class MobileBase(robot.Item):
         msg = ' '.join(["MobileBase.go() is depreacated."
                         "Use MobileBase.go_rel() or"
                         "MobileBase.go_abs() instead."])
-        warnings.warn(msg, exceptions.DeprecationWarning)
+        warnings.warn(msg, exceptions.HsrbInterfaceDeprecationWarning)
         if relative:
             self.go_rel(x, y, yaw, timeout)
         else:
             self.go_abs(x, y, yaw, timeout)
 
     def _send_goal_pose_and_wait(self, goal, timeout=0.0):
-        status_strings = {
-            action_msgs.GoalStatus.STATUS_UNKNOWN: "STATUS_UNKNOWN",  # noqa
-            action_msgs.GoalStatus.STATUS_ACCEPTED: "STATUS_ACCEPTED",  # noqa
-            action_msgs.GoalStatus.STATUS_EXECUTING: "STATUS_EXECUTING",  # noqa
-            action_msgs.GoalStatus.STATUS_CANCELING: "STATUS_CANCELING",  # noqa
-            action_msgs.GoalStatus.STATUS_SUCCEEDED: "STATUS_SUCCEEDED",  # noqa
-            action_msgs.GoalStatus.STATUS_CANCELED: "STATUS_CANCELED",  # noqa
-            action_msgs.GoalStatus.STATUS_ABORTED: "STATUS_ABORTED"  # noqa
-        }
         timeout_sec = timeout
         self.execute(goal)
         start_time = self._node.get_clock().now()
@@ -237,16 +220,16 @@ class MobileBase(robot.Item):
                     if (state == action_msgs.GoalStatus.STATUS_SUCCEEDED):
                         return
                     if (state != action_msgs.GoalStatus.STATUS_EXECUTING):
-                        msg = 'Failed to reach goal ({0})'.format(status_strings[state])
+                        msg = 'Failed to reach goal ({0})'.format(utils.get_action_state_text(state))
+                        self.cancel_goal()
                         raise exceptions.MobileBaseError(msg)
-                # If the timeout is 0.0, perform infinite waiting. (Do not increase elapsed time.)
+                # If the timeout is 0.0, perform an infinite wait. (Do not increase elapsed time.)
                 if timeout_sec != 0.0:
                     elapsed_time = self._node.get_clock().now() - start_time
             except KeyboardInterrupt:
-                goal_handle = self._send_goal_future.result()
-                goal_handle.cancel_goal_async()
-                return
+                break
 
+        self.cancel_goal()
         raise exceptions.MobileBaseError("Timed out")
 
     def follow_trajectory(self, poses, time_from_starts=[], ref_frame_id=None):
@@ -262,7 +245,6 @@ class MobileBase(robot.Item):
                 A reference frame of a goal. Default is ``map`` frame.
         Returns:
             None
-
         Examples:
             .. sourcecode:: python
 
@@ -329,7 +311,7 @@ class MobileBase(robot.Item):
 
         target_pose = PoseStamped()
         target_pose.header.frame_id = ref_frame_id
-        target_pose.header.stamp = self._node.get_clock().now().to_msg()
+        target_pose.header.stamp = rclpy.time.Time().to_msg()
         target_pose.pose = geometry.tuples_to_pose(pose)
         return target_pose
 
@@ -391,7 +373,6 @@ class MobileBase(robot.Item):
         Args:
             goal (geometry_msgs.msg.PoseStamped or
                   trajectory_msgs.msg.JointTrajectory): A goal to move
-
         Examples:
             .. sourcecode:: python
 
@@ -411,8 +392,7 @@ class MobileBase(robot.Item):
         if isinstance(goal, PoseStamped):
             action_goal = NavigateToPose.Goal()
             action_goal.pose = goal
-            self._send_goal_future = self._action_client.send_goal_async(
-                action_goal)
+            self._send_goal_future = self._action_client.send_goal_async(action_goal)
             rclpy.spin_until_future_complete(self._node, self._send_goal_future, timeout_sec=1.0)
             self._current_client = self._action_client
         elif isinstance(goal, JointTrajectory):
@@ -457,15 +437,7 @@ class MobileBase(robot.Item):
 
     def get_state(self):
         """Get a status of the action client"""
-        goal_handle = self._send_goal_future.result()
-        get_result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(
-            self._node, get_result_future, timeout_sec=0.1)
-        res = get_result_future.result()
-        if res is None:
-            return action_msgs.GoalStatus.STATUS_EXECUTING
-        else:
-            return res.status
+        return utils.get_action_state(self._node, self._send_goal_future)
 
     def cancel_goal(self):
         """Cancel moving."""

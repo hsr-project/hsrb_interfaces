@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -26,10 +26,10 @@
 """Unittest for sensor objects."""
 from unittest.mock import patch
 
+import _testing as testing
 from geometry_msgs.msg import WrenchStamped
 from hsrb_interface import Robot
 import hsrb_interface.sensors
-from nose.tools import eq_
 import rclpy
 
 from sensor_msgs.msg import Image
@@ -37,143 +37,133 @@ from sensor_msgs.msg import Imu
 from sensor_msgs.msg import LaserScan
 
 
-@patch('hsrb_interface.utils.CachingSubscriber')
-@patch('hsrb_interface.Robot._connecting')
-@patch('hsrb_interface.settings.get_entry')
-def test_camera(mock_get_entry, mock_connecting, mock_sub_class):
-    rclpy.init()
-    robot = Robot()  # noqa: F841
+class SensorTest(testing.RosMockTestCase):
 
-    """Test Camera class"""
-    mock_connecting.return_value = True
-    mock_get_entry.return_value = {
-        'name': 'head_l_stereo_camera',
-        'prefix': "/stereo_camera/left",
-    }
+    def setUp(self):
+        super().setUp()
 
-    camera = hsrb_interface.sensors.Camera('example')
-    mock_get_entry.assert_called_with('camera', 'example')
+        patcher = patch("hsrb_interface.utils.CachingSubscriber")
+        self.caching_sub_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
-    mock_sub_class.assert_called_with(
-        "/stereo_camera/left/image_raw", Image)
-    mock_sub_instance = mock_sub_class.return_value
+    def test_camera(self):
+        """Test Camera class"""
+        rclpy.init()
+        robot = Robot()  # noqa: F841
 
-    msg = Image()
-    msg.header.stamp.sec = 1
-    msg.header.stamp.nanosec = 2
-    msg.header.frame_id = 'map'
-    msg.height = 16
-    msg.width = 16
-    msg.encoding = 'rgb8'
-    msg.is_bigendian = 0
-    msg.step = msg.width * 3
-    msg.data = range(256)
+        self.get_entry_mock.return_value = {
+            'name': 'head_l_stereo_camera',
+            'prefix': "/stereo_camera/left",
+        }
 
-    mock_sub_instance.data = msg
-    image = camera.image
-    eq_(image.to_ros(), msg)
+        camera = hsrb_interface.sensors.Camera('example')
+        self.get_entry_mock.assert_called_with('camera', 'example')
 
+        self.caching_sub_mock.assert_called_with("/stereo_camera/left/image_raw", Image)
+        mock_sub_instance = self.caching_sub_mock.return_value
 
-@patch('hsrb_interface.utils.CachingSubscriber')
-@patch('hsrb_interface.Robot._connecting')
-@patch('hsrb_interface.settings.get_entry')
-def test_force_torque(mock_get_entry, mock_connecting,
-                      mock_sub_class):
-    robot = Robot()  # noqa: F841
-    """Test ForceTorque class"""
-    mock_connecting.return_value = True
-    mock_get_entry.return_value = {
-        'name': "example",
-        'raw_topic': "raw_wrench",
-        'compensated_topic': "compensated_wrench",
-        'reset_service': "reset_wrench",
-    }
+        msg = Image()
+        msg.header.stamp.sec = 1
+        msg.header.stamp.nanosec = 2
+        msg.header.frame_id = 'map'
+        msg.height = 16
+        msg.width = 16
+        msg.encoding = 'rgb8'
+        msg.is_bigendian = 0
+        msg.step = msg.width * 3
+        msg.data = range(256)
 
-    force_torque = hsrb_interface.sensors.ForceTorque('example')
-    mock_get_entry.assert_called_with('force_torque', 'example')
+        mock_sub_instance.data = msg
+        image = camera.image
+        self.assertEqual(image.to_ros(), msg)
 
-    mock_sub_class.assert_any_call("raw_wrench", WrenchStamped)
-    mock_sub_class.assert_any_call("compensated_wrench", WrenchStamped)
+    def test_force_torque(self):
+        """Test ForceTorque class"""
+        robot = Robot()  # noqa: F841
 
-    mock_sub_instance = mock_sub_class.return_value
+        self.get_entry_mock.return_value = {
+            'name': "example",
+            'raw_topic': "raw_wrench",
+            'compensated_topic': "compensated_wrench",
+            'reset_service': "reset_wrench",
+        }
 
-    msg = WrenchStamped()
-    msg.wrench.force.x = 0.0
-    msg.wrench.force.y = 1.0
-    msg.wrench.force.z = 2.0
-    msg.wrench.torque.x = 3.0
-    msg.wrench.torque.y = 4.0
-    msg.wrench.torque.z = 5.0
-    mock_sub_instance.data = msg
+        force_torque = hsrb_interface.sensors.ForceTorque('example')
+        self.get_entry_mock.assert_called_with('force_torque', 'example')
 
-    wrench = force_torque.raw
-    eq_(wrench, ((0.0, 1.0, 2.0), (3.0, 4.0, 5.0)))
-    wrench = force_torque.wrench
-    eq_(wrench, ((0.0, 1.0, 2.0), (3.0, 4.0, 5.0)))
+        self.caching_sub_mock.assert_any_call("raw_wrench", WrenchStamped)
+        self.caching_sub_mock.assert_any_call("compensated_wrench", WrenchStamped)
 
-    eq_(None, force_torque.reset())
+        mock_sub_instance = self.caching_sub_mock.return_value
 
+        msg = WrenchStamped()
+        msg.wrench.force.x = 0.0
+        msg.wrench.force.y = 1.0
+        msg.wrench.force.z = 2.0
+        msg.wrench.torque.x = 3.0
+        msg.wrench.torque.y = 4.0
+        msg.wrench.torque.z = 5.0
+        mock_sub_instance.data = msg
 
-@patch('hsrb_interface.utils.CachingSubscriber')
-@patch('hsrb_interface.Robot._connecting')
-@patch('hsrb_interface.settings.get_entry')
-def test_imu(mock_get_entry, mock_connecting, mock_sub_class):
-    robot = Robot()  # noqa: F841
+        wrench = force_torque.raw
+        self.assertEqual(wrench, ((0.0, 1.0, 2.0), (3.0, 4.0, 5.0)))
+        wrench = force_torque.wrench
+        self.assertEqual(wrench, ((0.0, 1.0, 2.0), (3.0, 4.0, 5.0)))
 
-    """Test Imu class"""
-    mock_connecting.return_value = True
-    mock_get_entry.return_value = {
-        'name': "example",
-        'topic': "foo",
-    }
+        self.assertEqual(None, force_torque.reset())
 
-    imu = hsrb_interface.sensors.IMU('example')
-    mock_get_entry.assert_called_with('imu', 'example')
+    def test_imu(self):
+        """Test Imu class"""
+        robot = Robot()  # noqa: F841
 
-    mock_sub_class.assert_called_with("foo", Imu)
-    mock_sub_instance = mock_sub_class.return_value
+        self.get_entry_mock.return_value = {
+            'name': "example",
+            'topic': "foo",
+        }
 
-    msg = Imu()
-    msg.orientation.x = 0.0
-    msg.orientation.y = 1.0
-    msg.orientation.z = 2.0
-    msg.orientation.w = 3.0
-    msg.angular_velocity.x = 4.0
-    msg.angular_velocity.y = 5.0
-    msg.angular_velocity.z = 6.0
-    msg.linear_acceleration.x = 7.0
-    msg.linear_acceleration.y = 8.0
-    msg.linear_acceleration.z = 9.0
+        imu = hsrb_interface.sensors.IMU('example')
+        self.get_entry_mock.assert_called_with('imu', 'example')
 
-    mock_sub_instance.data = msg
+        self.caching_sub_mock.assert_called_with("foo", Imu)
+        mock_sub_instance = self.caching_sub_mock.return_value
 
-    ori, angular_vel, linear_acc = imu.data
-    eq_(ori, (0.0, 1.0, 2.0, 3.0))
-    eq_(angular_vel, (4.0, 5.0, 6.0))
-    eq_(linear_acc, (7.0, 8.0, 9.0))
+        msg = Imu()
+        msg.orientation.x = 0.0
+        msg.orientation.y = 1.0
+        msg.orientation.z = 2.0
+        msg.orientation.w = 3.0
+        msg.angular_velocity.x = 4.0
+        msg.angular_velocity.y = 5.0
+        msg.angular_velocity.z = 6.0
+        msg.linear_acceleration.x = 7.0
+        msg.linear_acceleration.y = 8.0
+        msg.linear_acceleration.z = 9.0
 
+        mock_sub_instance.data = msg
 
-@patch('hsrb_interface.utils.CachingSubscriber')
-@patch('hsrb_interface.robot.Robot._connecting')
-@patch('hsrb_interface.settings.get_entry')
-def test_lidar(mock_get_entry, mock_connecting, mock_sub_class):
-    robot = Robot()  # noqa: F841
-    """Test Lidar class"""
-    mock_connecting.return_value = True
-    mock_get_entry.return_value = {
-        'name': "example",
-        'topic': "foo",
-    }
+        ori, angular_vel, linear_acc = imu.data
+        self.assertEqual(ori, (0.0, 1.0, 2.0, 3.0))
+        self.assertEqual(angular_vel, (4.0, 5.0, 6.0))
+        self.assertEqual(linear_acc, (7.0, 8.0, 9.0))
 
-    lidar = hsrb_interface.sensors.Lidar('example')
-    mock_get_entry.assert_called_with('lidar', 'example')
+    def test_lidar(self):
+        """Test Lidar class"""
+        robot = Robot()  # noqa: F841
 
-    mock_sub_class.assert_called_with("foo", LaserScan)
-    mock_sub_instance = mock_sub_class.return_value
+        self.get_entry_mock.return_value = {
+            'name': "example",
+            'topic': "foo",
+        }
 
-    msg = LaserScan()
-    mock_sub_instance.data = msg
+        lidar = hsrb_interface.sensors.Lidar('example')
+        self.get_entry_mock.assert_called_with('lidar', 'example')
 
-    scan = lidar.scan
+        self.caching_sub_mock.assert_called_with("foo", LaserScan)
+        mock_sub_instance = self.caching_sub_mock.return_value
 
-    eq_(scan.to_ros(), msg)
+        msg = LaserScan()
+        mock_sub_instance.data = msg
+
+        scan = lidar.scan
+
+        self.assertEqual(scan.to_ros(), msg)
