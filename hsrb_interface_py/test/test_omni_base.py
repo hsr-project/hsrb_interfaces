@@ -1,4 +1,4 @@
-# Copyright (c) 2025 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -24,625 +24,554 @@
 # OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 # DAMAGE.
 """Unittest for hsrb_interface.mobile_base module"""
-import time
 from unittest.mock import MagicMock
 from unittest.mock import patch
 import warnings
 
+import _testing as testing
 import action_msgs.msg as action_msgs
 from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import TransformStamped
 import hsrb_interface
 from hsrb_interface import Robot
+
 import hsrb_interface.mobile_base
 from nav2_msgs.action import NavigateToPose
-from nose.tools import assert_almost_equal
-from nose.tools import assert_false
-from nose.tools import assert_raises
-from nose.tools import assert_true
-from nose.tools import eq_
-from nose.tools import ok_
 import rclpy
+from sensor_msgs.msg import JointState
 import tf_transformations
 from trajectory_msgs.msg import JointTrajectory
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-def test_mobile_base(mock_caching,
-                     mock_get_entry,
-                     mock_action_client_cls,
-                     mock_trajectory_controller):
-    """Test simple use case of MobileBase class"""
-    Robot()
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    ok_(mobile_base)
-    mock_get_entry.assert_called_with('mobile_base', 'omni_base')
-    mock_action_client_cls.assert_called_with(mobile_base._node, NavigateToPose, '/move_base/move')
-
-
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_frame')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-@patch('rclpy.node.Node.get_clock')
-def test_mobile_base_goto_x_y_yaw(mock_node_time,
-                                  mock_caching,
-                                  mock_get_entry,
-                                  mock_get_frame,
-                                  mock_action_client_cls,
-                                  mock_trajectory_controller):
-    """Test MobileBase.go_abs and MobileBase.go_rel"""
-    Robot()
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states'
-    }
-    mock_get_frame.return_value = 'hoge'
-    mock_action_client = mock_action_client_cls.return_value
-    mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
-    mock_client_send_goal = mock_client_send_goal_async.result.return_value
-    mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
-    mock_client_get_result = mock_client_get_result_async.result.return_value
-    mock_client_get_result.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
-
-    time_second = int(time.time())
-    time_nanosecond = int((time.time() - time_second) * 1e9)
-    mock_time = mock_node_time.return_value
-    mock_time.now.return_value = rclpy.time.Time(seconds=time_second, nanoseconds=time_nanosecond)
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    mobile_base.go_abs(0.0, 1.0, 2.0, timeout=3.0)
-
-    expected_goal = NavigateToPose.Goal()
-    expected_goal.pose.header.frame_id = 'hoge'
-    expected_goal.pose.header.stamp = mobile_base._node.get_clock().now().to_msg()
-    expected_goal.pose.pose.position.x = 0.0
-    expected_goal.pose.pose.position.y = 1.0
-    q = tf_transformations.quaternion_from_euler(0.0, 0.0, 2.0)
-    expected_goal.pose.pose.orientation.x = q[0]
-    expected_goal.pose.pose.orientation.y = q[1]
-    expected_goal.pose.pose.orientation.z = q[2]
-    expected_goal.pose.pose.orientation.w = q[3]
-
-    mock_get_frame.assert_called_with('map')
-    mock_action_client.send_goal_async.assert_called_with(expected_goal)
-
-    mobile_base.go_rel(0.0, 1.0, 2.0, timeout=3.0)
-    mock_get_frame.assert_called_with('base')
-
-    warnings.simplefilter('always')
-    with warnings.catch_warnings(record=True) as w:
-        mobile_base.go(0.0, 1.0, 2.0, timeout=3.0, relative=False)
-        mock_get_frame.assert_called_with('map')
-        eq_(w[0].category, hsrb_interface.exceptions.DeprecationWarning)
-
-    with warnings.catch_warnings(record=True) as w:
-        mobile_base.go(0.0, 1.0, 2.0, timeout=3.0, relative=True)
-        mock_get_frame.assert_called_with('base')
-        eq_(w[0].category, hsrb_interface.exceptions.DeprecationWarning)
-
-
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-@patch('rclpy.node.Node.get_clock')
-def test_mobile_base_goto_pos_ori(mock_node_time,
-                                  mock_caching,
-                                  mock_get_entry,
-                                  mock_action_client_cls,
-                                  mock_trajectory_controller):
-
-    Robot()
-
-    """Test MobileBase.go_pose"""
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states'
-    }
-
-    mock_action_client = mock_action_client_cls.return_value
-    mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
-    mock_client_send_goal = mock_client_send_goal_async.result.return_value
-    mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
-    mock_client_get_result = mock_client_get_result_async.result.return_value
-    mock_client_get_result.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
-
-    time_second = int(time.time())
-    time_nanosecond = int((time.time() - time_second) * 1e9)
-    mock_time = mock_node_time.return_value
-    mock_time.now.return_value = rclpy.time.Time(seconds=time_second, nanoseconds=time_nanosecond)
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    pose = ((0.0, 1.0, 2.0), (0.5, 0.5, 0.5, 0.5))
-    mobile_base.go_pose(pose, timeout=3.0, ref_frame_id='map')
-
-    expected_goal = NavigateToPose.Goal()
-    expected_goal.pose.header.frame_id = 'map'
-    expected_goal.pose.header.stamp = mobile_base._node.get_clock().now().to_msg()
-    expected_goal.pose.pose.position.x = 0.0
-    expected_goal.pose.pose.position.y = 1.0
-    expected_goal.pose.pose.position.z = 2.0
-    expected_goal.pose.pose.orientation.x = 0.5
-    expected_goal.pose.pose.orientation.y = 0.5
-    expected_goal.pose.pose.orientation.z = 0.5
-    expected_goal.pose.pose.orientation.w = 0.5
-
-    mock_action_client.send_goal_async.assert_called_with(expected_goal)
-
-    warnings.simplefilter('always')
-    with warnings.catch_warnings(record=True) as w:
-        mobile_base.move(pose, timeout=3.0, ref_frame_id='map')
-        eq_(w[0].category, hsrb_interface.exceptions.DeprecationWarning)
-
-
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-def test_mobile_base_get_pose(mock_caching,
-                              mock_get_entry,
-                              mock_action_client_cls,
-                              mock_trajectory_controller):
-    """Test MobileBase.get_pose()"""
-    Robot()
-
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    ok_(mobile_base)
-
-
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-def test_mobile_base_go_failure(mock_caching,
-                                mock_get_entry,
-                                mock_action_client_cls,
-                                mock_trajectory_controller):
-    """Test MobileBase.go faile if timeout is invalid"""
-    Robot()
-
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-
-    # Calling in a state where prerequisites are not met, and if given valid arguments, an error occurs before determining the test results.
-    # TODO(kazuki_shibamiya) : 正常系と前提条件を揃えて、go_absの引数に正常値を設定した場合はエラーとならないようにする。
-    assert_raises(ValueError, mobile_base.go_abs, 0.0, 0.0, 0.0, -1.0)
-    assert_raises(ValueError, mobile_base.go_abs, 0.0, 0.0, 0.0, float('inf'))
-    assert_raises(ValueError, mobile_base.go_abs, 0.0, 0.0, 0.0, float('nan'))
-
-    assert_raises(ValueError, mobile_base.go_rel, 0.0, 0.0, 0.0, -1.0)
-    assert_raises(ValueError, mobile_base.go_rel, 0.0, 0.0, 0.0, float('inf'))
-    assert_raises(ValueError, mobile_base.go_rel, 0.0, 0.0, 0.0, float('nan'))
-
-
-@patch('hsrb_interface.trajectory.wait_controllers')
-@patch('hsrb_interface.trajectory.hsr_timeopt_filter')
-@patch('hsrb_interface.trajectory.transform_base_trajectory')
-@patch('hsrb_interface.settings.get_frame')
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber', autospec=True)
-def test_mobile_base_follow_trajectory(mock_caching_cls,
-                                       mock_get_entry,
-                                       mock_action_client_cls,
-                                       mock_trajectory_controller,
-                                       mock_get_frame,
-                                       mock_transform_trajectory,
-                                       mock_timeopt_filter,
-                                       mock_wait_controllers):
-    """Test MobileBase.follow with poses"""
-    Robot()
-    mock_caching = mock_caching_cls.return_value
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-    mock_action_client = mock_action_client_cls.return_value
-    mock_action_client.wait_for_server.return_value = True
-    mock_get_frame.return_value = 'hoge'
-    trajectory = JointTrajectory()
-    for index in range(3):
-        trajectory.points.append(JointTrajectoryPoint())
-    mock_transform_trajectory.return_value = trajectory
-    mock_timeopt_filter.return_value = trajectory
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    mobile_base.get_pose = MagicMock()
-    mobile_base.get_pose.return_value = hsrb_interface.geometry.pose(x=2.0)
-
-    poses = [hsrb_interface.geometry.pose(x=1.0),
-             hsrb_interface.geometry.pose(x=0.0)]
-    mobile_base.follow_trajectory(poses)
-
-    mock_get_frame.assert_called_with('map')
-    mock_timeopt_filter.assert_called_with(mock_transform_trajectory.return_value, mock_caching.data, mobile_base._node)
-    mock_follow_client = mock_trajectory_controller.return_value
-    mock_follow_client.submit.assert_called_with(trajectory)
-    mock_wait_controllers.assert_called_with(mobile_base._node, [mock_follow_client])
-
-    trajectory = mock_transform_trajectory.call_args[0][0]
-    eq_(trajectory.header.frame_id, 'hoge')
-    eq_(len(trajectory.points), 3)
-    assert_almost_equal(trajectory.points[0].transforms[0].translation.x, 2.0)
-    assert_almost_equal(trajectory.points[1].transforms[0].translation.x, 1.0)
-    assert_almost_equal(trajectory.points[2].transforms[0].translation.x, 0.0)
-
-    # Set ref_frame_id
-    mock_get_frame.reset_mock()
-    mobile_base.follow_trajectory(poses, ref_frame_id='var')
-
-    mock_get_frame.assert_not_called()
-    trajectory = mock_transform_trajectory.call_args[0][0]
-    eq_(trajectory.header.frame_id, 'var')
-
-
-@patch('hsrb_interface.trajectory.wait_controllers')
-@patch('hsrb_interface.trajectory.transform_base_trajectory')
-@patch('hsrb_interface.settings.get_frame')
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber', autospec=True)
-def test_mobile_base_follow_trajectory_with_stamp(mock_caching_cls,
-                                                  mock_get_entry,
-                                                  mock_action_client_cls,
-                                                  mock_trajectory_controller,
-                                                  mock_get_frame,
-                                                  mock_transform_trajectory,
-                                                  mock_wait_controllers):
-    """Test MobileBase.follow with stamped poses"""
-    Robot()
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-    mock_action_client = mock_action_client_cls.return_value
-    mock_action_client.wait_for_server.return_value = True
-    mock_get_frame.return_value = 'hoge'
-
-    trajectory = JointTrajectory()
-    for index in range(3):
-        trajectory.points.append(JointTrajectoryPoint())
-    mock_transform_trajectory.return_value = trajectory
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    mobile_base.get_pose = MagicMock()
-    mobile_base.get_pose.return_value = hsrb_interface.geometry.pose(x=2.0)
-
-    poses = [hsrb_interface.geometry.pose(x=1.0),
-             hsrb_interface.geometry.pose(x=0.0)]
-    mobile_base.follow_trajectory(poses, [3.0, 6.0])
-
-    mock_get_frame.assert_called_with('map')
-    mock_follow_client = mock_trajectory_controller.return_value
-    mock_wait_controllers.assert_called_with(mobile_base._node, [mock_follow_client])
-
-    submitted_trajectory = mock_follow_client.submit.call_args[0][0]
-    eq_(len(submitted_trajectory.points), 2)
-    assert_almost_equal(
-        submitted_trajectory.points[0].time_from_start.sec, 3.0)
-    assert_almost_equal(
-        submitted_trajectory.points[1].time_from_start.sec, 6.0)
-
-    # Length of time_from_starts and poses should be same
-    assert_raises(ValueError, mobile_base.follow_trajectory,
-                  poses, [3.0])
-    assert_raises(ValueError, mobile_base.follow_trajectory,
-                  poses, [0.0, 3.0, 6.0])
-
-
-@patch('hsrb_interface.settings.get_frame')
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-def test_create_go_pose_goal(mock_caching,
-                             mock_get_entry,
-                             mock_action_client_cls,
-                             mock_trajectory_controller,
-                             mock_get_frame):
-    """Test MobileBase.create_move_goal"""
-    Robot()
-
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-
-    mock_get_frame.return_value = 'hoge'
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-
-    goal = mobile_base.create_go_pose_goal(hsrb_interface.geometry.pose(x=1.0))
-    eq_(goal.header.frame_id, 'hoge')
-    assert_almost_equal(goal.pose.position.x, 1.0)
-
-    goal = mobile_base.create_go_pose_goal(hsrb_interface.geometry.pose(),
-                                           'piyo')
-    eq_(goal.header.frame_id, 'piyo')
-    assert_almost_equal(goal.pose.position.x, 0.0)
-
-
-@patch('hsrb_interface.trajectory.hsr_timeopt_filter')
-@patch('hsrb_interface.trajectory.transform_base_trajectory')
-@patch('hsrb_interface.settings.get_frame')
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber', autospec=True)
-def test_create_follow_goal(mock_caching_cls,
-                            mock_get_entry,
-                            mock_action_client_cls,
-                            mock_trajectory_controller,
-                            mock_get_frame,
-                            mock_transform_trajectory,
-                            mock_timeopt_filter):
-    """Test MobileBase.create_follow_trajectory_goal"""
-    Robot()
-    mock_caching = mock_caching_cls.return_value
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-    mock_action_client = mock_action_client_cls.return_value
-    mock_action_client.wait_for_server.return_value = True
-    mock_get_frame.return_value = 'hoge'
-    trajectory = JointTrajectory()
-    for index in range(3):
-        trajectory.points.append(JointTrajectoryPoint())
-    mock_transform_trajectory.return_value = trajectory
-    mock_timeopt_filter.return_value = trajectory
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    mobile_base.get_pose = MagicMock()
-    mobile_base.get_pose.return_value = hsrb_interface.geometry.pose(x=2.0)
-
-    # Without time_from_starts
-    poses = [hsrb_interface.geometry.pose(x=1.0),
-             hsrb_interface.geometry.pose(x=0.0)]
-    goal = mobile_base.create_follow_trajectory_goal(poses)
-
-    mock_get_frame.assert_called_with('map')
-    mock_timeopt_filter.assert_called_with(mock_transform_trajectory.return_value, mock_caching.data, mobile_base._node)
-    trajectory = mock_transform_trajectory.call_args[0][0]
-    eq_(trajectory.header.frame_id, 'hoge')
-    eq_(len(trajectory.points), 3)
-    assert_almost_equal(trajectory.points[0].transforms[0].translation.x, 2.0)
-    assert_almost_equal(trajectory.points[1].transforms[0].translation.x, 1.0)
-    assert_almost_equal(trajectory.points[2].transforms[0].translation.x, 0.0)
-
-    # Set ref_frame_id
-    mock_get_frame.reset_mock()
-    goal = mobile_base.create_follow_trajectory_goal(poses, ref_frame_id='var')
-
-    mock_get_frame.assert_not_called()
-    trajectory = mock_transform_trajectory.call_args[0][0]
-    eq_(trajectory.header.frame_id, 'var')
-
-    # With time_from_starts
-    mock_get_frame.reset_mock()
-    trajectory = JointTrajectory()
-    for index in range(3):
-        trajectory.points.append(JointTrajectoryPoint())
-    mock_transform_trajectory.return_value = trajectory
-    goal = mobile_base.create_follow_trajectory_goal(poses, [3.0, 6.0])
-
-    mock_get_frame.assert_called_with('map')
-    eq_(len(goal.points), 2)
-    assert_almost_equal(goal.points[0].time_from_start.sec, 3.0)
-    assert_almost_equal(goal.points[1].time_from_start.sec, 6.0)
-
-    # Length of time_from_starts and poses should be same
-    assert_raises(ValueError, mobile_base.create_follow_trajectory_goal,
-                  poses, [3.0])
-    assert_raises(ValueError, mobile_base.create_follow_trajectory_goal,
-                  poses, [0.0, 3.0, 6.0])
-
-
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-def test_execute(mock_caching,
-                 mock_get_entry,
-                 mock_action_client_cls,
-                 mock_trajectory_controller):
-    """Test MobileBase.execute"""
-    Robot()
-
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-
-    mock_action_client = mock_action_client_cls.return_value
-    mock_follow_client = mock_trajectory_controller.return_value
-
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-
-    input_goal = PoseStamped()
-    mobile_base.execute(input_goal)
-    action_goal = mock_action_client.send_goal_async.call_args[0][0]
-    eq_(action_goal.pose, input_goal)
-
-    mobile_base.execute(JointTrajectory())
-    mock_follow_client.submit.assert_called_with(JointTrajectory())
-
-    assert_raises(ValueError, mobile_base.execute, 'hoge')
-
-
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-def test_is_moving(mock_caching,
-                   mock_get_entry,
-                   mock_action_client_cls,
-                   mock_trajectory_controller):
-    """Test MobileBase.is_moving"""
-    Robot()
-
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-
-    mock_action_client = mock_action_client_cls.return_value
-    mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
-    mock_client_send_goal = mock_client_send_goal_async.result.return_value
-    mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
-    mock_client_get_result = mock_client_get_result_async.result.return_value
-    mock_follow_client = mock_trajectory_controller.return_value
-
-    # mobile_base.execute is not called
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    assert_false(mobile_base.is_moving())
-
-    # Send pose
-    mobile_base.execute(PoseStamped())
-    mock_client_get_result.status = action_msgs.GoalStatus.STATUS_EXECUTING
-    assert_true(mobile_base.is_moving())
-
-    mock_client_get_result.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
-    assert_false(mobile_base.is_moving())
-
-    # Send trajetory
-    mobile_base.execute(JointTrajectory())
-    mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_EXECUTING
-    assert_true(mobile_base.is_moving())
-
-    mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_SUCCEEDED
-    assert_false(mobile_base.is_moving())
-
-
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-def test_is_succeeded(mock_caching,
-                      mock_get_entry,
-                      mock_action_client_cls,
-                      mock_trajectory_controller):
-    """Test MobileBase.is_succeeded"""
-    Robot()
-
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-
-    mock_action_client = mock_action_client_cls.return_value
-    mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
-    mock_client_send_goal = mock_client_send_goal_async.result.return_value
-    mock_follow_client = mock_trajectory_controller.return_value
-
-    # mobile_base.execute is not called
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    assert_false(mobile_base.is_moving())
-
-    # Send pose
-    mobile_base.execute(PoseStamped())
-    mock_client_send_goal.status = action_msgs.GoalStatus.STATUS_EXECUTING
-    assert_false(mobile_base.is_succeeded())
-
-    mock_client_send_goal.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
-    assert_true(mobile_base.is_succeeded())
-
-    # Send trajetory
-    mobile_base.execute(JointTrajectory())
-    mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_EXECUTING
-    assert_false(mobile_base.is_succeeded())
-
-    mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_SUCCEEDED
-    assert_true(mobile_base.is_succeeded())
-
-
-@patch('hsrb_interface.trajectory.TrajectoryController')
-@patch('hsrb_interface.mobile_base.ActionClient')
-@patch('hsrb_interface.settings.get_entry')
-@patch('hsrb_interface.utils.CachingSubscriber')
-def test_cancel_goal(mock_caching,
-                     mock_get_entry,
-                     mock_action_client_cls,
-                     mock_trajectory_controller):
-    """Test MobileBase.cancel_goal"""
-    Robot()
-
-    mock_get_entry.return_value = {
-        'navigation_action': '/move_base/move',
-        'follow_trajectory_action': '/omni_base_controller',
-        'pose_topic': '/global_pose',
-        'joint_states_topic': '/joint_states',
-    }
-
-    mock_action_client = mock_action_client_cls.return_value
-    mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
-    mock_client_send_goal = mock_client_send_goal_async.result.return_value
-    mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
-    mock_client_get_result = mock_client_get_result_async.result.return_value
-    mock_follow_client = mock_trajectory_controller.return_value
-
-    # Cancel without goal
-    mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
-    mobile_base.cancel_goal()
-
-    mock_action_client.cancel_goal.assert_not_called()
-    mock_follow_client.cancel.assert_not_called()
-
-    # Send pose and cancel
-    mobile_base.execute(PoseStamped())
-    mock_client_get_result.status = action_msgs.GoalStatus.STATUS_EXECUTING
-    mobile_base.cancel_goal()
-
-    mock_client_send_goal.cancel_goal_async.assert_called_once_with()
-    mock_follow_client.cancel.assert_not_called()
-
-    # Send trajectory and cancel
-    mobile_base.execute(JointTrajectory())
-    mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_EXECUTING
-    mobile_base.cancel_goal()
-
-    mock_follow_client.cancel.assert_called_once_with()
+class OmniBaseTest(testing.RosMockTestCase):
+
+    def setUp(self):
+        super().setUp()
+
+        patcher = patch("hsrb_interface.trajectory.TrajectoryController")
+        self.traj_controller_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = patch("hsrb_interface.mobile_base.ActionClient")
+        self.action_client_mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = patch("hsrb_interface.utils.CachingSubscriber")
+        self.caching_sub_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = patch("hsrb_interface.utils.get_transform")
+        self.get_transform_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = patch("hsrb_interface.trajectory.transform_base_trajectory")
+        self.transform_base_trajectory_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = patch("hsrb_interface.trajectory.hsr_timeopt_filter")
+        self.hsr_timeopt_filter_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = patch("hsrb_interface.trajectory.wait_controllers")
+        self.wait_controllers_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_init(self):
+        """Test MobileBase.__init__"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+        self.get_entry_mock.assert_called_with('mobile_base', 'omni_base')
+        self.traj_controller_mock.assert_called_with('/omni_base_controller', 'base_coordinates')
+        self.action_client_mock_cls.assert_called_with(mobile_base._node, NavigateToPose, '/move_base/move')
+        self.caching_sub_mock.assert_called_with('/joint_states', JointState, default=JointState())
+
+    def test_goto_x_y_yaw(self):
+        """Test MobileBase.go_abs and MobileBase.go_rel"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+        self.get_frame_mock.return_value = 'test_frame'
+
+        mock_action_client = self.action_client_mock_cls.return_value
+        mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
+        mock_client_send_goal = mock_client_send_goal_async.result.return_value
+        mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
+
+        mock_client_get_result = mock_client_get_result_async.result.return_value
+        mock_client_get_result.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+
+        # Test go_abs
+        mobile_base.go_abs(0.0, 1.0, 2.0, timeout=3.0)
+
+        expected_goal = NavigateToPose.Goal()
+        expected_goal.pose.header.frame_id = 'test_frame'
+        expected_goal.pose.header.stamp = rclpy.time.Time().to_msg()
+        expected_goal.pose.pose.position.x = 0.0
+        expected_goal.pose.pose.position.y = 1.0
+        q = tf_transformations.quaternion_from_euler(0.0, 0.0, 2.0)
+        expected_goal.pose.pose.orientation.x = q[0]
+        expected_goal.pose.pose.orientation.y = q[1]
+        expected_goal.pose.pose.orientation.z = q[2]
+        expected_goal.pose.pose.orientation.w = q[3]
+
+        self.get_frame_mock.assert_called_with('map')
+        self.action_client_mock_cls.return_value.send_goal_async.assert_called_with(expected_goal)
+
+        # Test go_rel
+        mobile_base.go_rel(0.0, 1.0, 2.0, timeout=3.0)
+
+        self.get_frame_mock.assert_called_with('base')
+
+        # Test deprecated warnings
+        warnings.simplefilter('always')
+        with warnings.catch_warnings(record=True) as w:
+            mobile_base.go(0.0, 1.0, 2.0, timeout=3.0, relative=False)
+            self.get_frame_mock.assert_called_with('map')
+            self.assertEqual(w[0].category, hsrb_interface.exceptions.HsrbInterfaceDeprecationWarning)
+
+        with warnings.catch_warnings(record=True) as w:
+            mobile_base.go(0.0, 1.0, 2.0, timeout=3.0, relative=True)
+            self.get_frame_mock.assert_called_with('base')
+            self.assertEqual(w[0].category, hsrb_interface.exceptions.HsrbInterfaceDeprecationWarning)
+
+    def test_goto_pos_ori(self):
+        """Test MobileBase.go_pose"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+        mock_action_client = self.action_client_mock_cls.return_value
+        mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
+        mock_client_send_goal = mock_client_send_goal_async.result.return_value
+        mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
+
+        mock_client_get_result = mock_client_get_result_async.result.return_value
+        mock_client_get_result.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+
+        pose = ((0.0, 1.0, 2.0), (0.5, 0.5, 0.5, 0.5))
+        mobile_base.go_pose(pose, timeout=3.0, ref_frame_id='map')
+
+        expected_goal = NavigateToPose.Goal()
+        expected_goal.pose.header.frame_id = 'map'
+        expected_goal.pose.header.stamp = rclpy.time.Time().to_msg()
+        expected_goal.pose.pose.position.x = 0.0
+        expected_goal.pose.pose.position.y = 1.0
+        expected_goal.pose.pose.position.z = 2.0
+        expected_goal.pose.pose.orientation.x = 0.5
+        expected_goal.pose.pose.orientation.y = 0.5
+        expected_goal.pose.pose.orientation.z = 0.5
+        expected_goal.pose.pose.orientation.w = 0.5
+
+        self.action_client_mock_cls.return_value.send_goal_async.assert_called_with(expected_goal)
+
+        warnings.simplefilter('always')
+        with warnings.catch_warnings(record=True) as w:
+            mobile_base.move(pose, timeout=3.0, ref_frame_id='map')
+            self.assertEqual(w[0].category, hsrb_interface.exceptions.HsrbInterfaceDeprecationWarning)
+
+    def test_get_pose(self):
+        """Test MobileBase.get_pose()"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+        self.get_frame_mock.return_value = 'test_frame'
+
+        transform_stamped_msg = TransformStamped()
+        transform_stamped_msg.header.frame_id = 'test_origin'
+        transform_stamped_msg.child_frame_id = 'test_frame'
+        transform_stamped_msg.transform.translation.x = 1.0
+        transform_stamped_msg.transform.translation.y = 2.0
+        transform_stamped_msg.transform.translation.z = 3.0
+        transform_stamped_msg.transform.rotation.x = 0.5
+        transform_stamped_msg.transform.rotation.y = 0.5
+        transform_stamped_msg.transform.rotation.z = 0.5
+        transform_stamped_msg.transform.rotation.w = 0.5
+        self.get_transform_mock.return_value = transform_stamped_msg
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+
+        pose = mobile_base.get_pose('test_origin')
+        self.assertEqual(pose, ((1.0, 2.0, 3.0), (0.5, 0.5, 0.5, 0.5)))
+
+        self.get_frame_mock.assert_called_with('base')
+        self.get_transform_mock.assert_called_with(
+            mobile_base._node, mobile_base._tf2_buffer, 'test_origin', 'test_frame', 5.0)
+
+    def test_go_failure(self):
+        """Test MobileBase.go_abs and MobileBase.go_rel failure if timeout is invalid"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+        self.get_frame_mock.return_value = 'test_frame'
+
+        mock_action_client = self.action_client_mock_cls.return_value
+        mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
+        mock_client_send_goal = mock_client_send_goal_async.result.return_value
+        mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
+
+        mock_client_get_result = mock_client_get_result_async.result.return_value
+        mock_client_get_result.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+        mobile_base.go_abs(0.0, 1.0, 2.0, timeout=3.0)
+
+        with self.assertRaises(ValueError):
+            mobile_base.go_abs(0.0, 1.0, 2.0, timeout=-1.0)
+
+        with self.assertRaises(ValueError):
+            mobile_base.go_abs(0.0, 1.0, 2.0, timeout=float('inf'))
+
+        with self.assertRaises(ValueError):
+            mobile_base.go_abs(0.0, 1.0, 2.0, timeout=float('nan'))
+
+        with self.assertRaises(ValueError):
+            mobile_base.go_rel(0.0, 1.0, 2.0, timeout=-1.0)
+
+        with self.assertRaises(ValueError):
+            mobile_base.go_rel(0.0, 1.0, 2.0, timeout=float('inf'))
+
+        with self.assertRaises(ValueError):
+            mobile_base.go_rel(0.0, 1.0, 2.0, timeout=float('nan'))
+
+    def test_follow_trajectory(self):
+        """Test MobileBase.follow_trajectory()"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+        self.get_frame_mock.return_value = 'test_frame'
+
+        trajectory = JointTrajectory()
+        for _ in range(3):
+            trajectory.points.append(JointTrajectoryPoint())
+        self.transform_base_trajectory_mock.return_value = trajectory
+        self.hsr_timeopt_filter_mock.return_value = trajectory
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+
+        mobile_base.get_pose = MagicMock()
+        mobile_base.get_pose.return_value = ((2.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+
+        poses = [hsrb_interface.geometry.pose(x=1.0),
+                 hsrb_interface.geometry.pose(x=0.0)]
+        mobile_base.follow_trajectory(poses)
+
+        self.get_frame_mock.assert_called_with('map')
+        self.hsr_timeopt_filter_mock.assert_called_with(
+            trajectory, mobile_base._joint_state_sub.data, mobile_base._node)
+        self.traj_controller_mock.return_value.submit.assert_called_with(trajectory)
+        self.wait_controllers_mock.assert_called_with(mobile_base._node, [self.traj_controller_mock.return_value])
+
+        trajectory = self.transform_base_trajectory_mock.call_args[0][0]
+        self.assertEqual(trajectory.header.frame_id, 'test_frame')
+        self.assertEqual(len(trajectory.points), 3)
+        self.assertAlmostEqual(trajectory.points[0].transforms[0].translation.x, 2.0)
+        self.assertAlmostEqual(trajectory.points[1].transforms[0].translation.x, 1.0)
+        self.assertAlmostEqual(trajectory.points[2].transforms[0].translation.x, 0.0)
+
+        # Set ref_frame_id
+        self.get_frame_mock.reset_mock()
+        mobile_base.follow_trajectory(poses, ref_frame_id='var')
+
+        self.get_frame_mock.assert_not_called()
+        trajectory = self.transform_base_trajectory_mock.call_args[0][0]
+        self.assertEqual(trajectory.header.frame_id, 'var')
+
+    def test_follow_trajectory_with_stamp(self):
+        """Test MobileBase.follow_trajectory() with stamped poses"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+        self.get_frame_mock.return_value = 'test_frame'
+
+        trajectory = JointTrajectory()
+        for _ in range(3):
+            trajectory.points.append(JointTrajectoryPoint())
+        self.transform_base_trajectory_mock.return_value = trajectory
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+
+        mobile_base.get_pose = MagicMock()
+        mobile_base.get_pose.return_value = ((2.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+
+        poses = [hsrb_interface.geometry.pose(x=1.0),
+                 hsrb_interface.geometry.pose(x=0.0)]
+        time_from_starts = [3.0, 6.0]
+        mobile_base.follow_trajectory(poses, time_from_starts)
+
+        self.get_frame_mock.assert_called_with('map')
+        self.hsr_timeopt_filter_mock.assert_not_called()
+
+        trajectory = self.traj_controller_mock.return_value.submit.call_args[0][0]
+
+        point_1 = trajectory.points[0]
+        self.assertAlmostEqual(point_1.time_from_start.sec + point_1.time_from_start.nanosec * 1e-9, 3.0)
+
+        point_2 = trajectory.points[1]
+        self.assertAlmostEqual(point_2.time_from_start.sec + point_2.time_from_start.nanosec * 1e-9, 6.0)
+
+        # Length of time_from_starts and poses should be same
+        with self.assertRaises(ValueError):
+            mobile_base.follow_trajectory(poses, [3.0])
+
+        with self.assertRaises(ValueError):
+            mobile_base.follow_trajectory(poses, [0.0, 3.0, 6.0])
+
+    def test_create_go_pose_goal(self):
+        """Test MobileBase.create_go_pose_goal"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+        self.get_frame_mock.return_value = 'test_frame'
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+
+        goal = mobile_base.create_go_pose_goal(hsrb_interface.geometry.pose(x=1.0))
+        self.assertEqual(goal.header.frame_id, 'test_frame')
+        self.assertAlmostEqual(goal.pose.position.x, 1.0)
+
+        goal = mobile_base.create_go_pose_goal(hsrb_interface.geometry.pose(),
+                                               ref_frame_id='piyo')
+        self.assertEqual(goal.header.frame_id, 'piyo')
+        self.assertAlmostEqual(goal.pose.position.x, 0.0)
+
+    def test_create_follow_goal(self):
+        """Test MobileBase.create_follow_trajectory_goal"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+        self.get_frame_mock.return_value = 'test_frame'
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+
+        mobile_base.get_pose = MagicMock()
+        mobile_base.get_pose.return_value = ((2.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+
+        poses = [hsrb_interface.geometry.pose(x=1.0),
+                 hsrb_interface.geometry.pose(x=0.0)]
+        _ = mobile_base.create_follow_trajectory_goal(poses)
+
+        self.get_frame_mock.assert_called_with('map')
+        trajectory = self.transform_base_trajectory_mock.call_args[0][0]
+        self.assertEqual(trajectory.header.frame_id, 'test_frame')
+        self.assertEqual(len(trajectory.points), 3)
+        self.assertAlmostEqual(trajectory.points[0].transforms[0].translation.x, 2.0)
+        self.assertAlmostEqual(trajectory.points[1].transforms[0].translation.x, 1.0)
+        self.assertAlmostEqual(trajectory.points[2].transforms[0].translation.x, 0.0)
+
+        # Set ref_frame_id
+        self.get_frame_mock.reset_mock()
+        _ = mobile_base.create_follow_trajectory_goal(poses, ref_frame_id='var')
+        self.get_frame_mock.assert_not_called()
+        trajectory = self.transform_base_trajectory_mock.call_args[0][0]
+        self.assertEqual(trajectory.header.frame_id, 'var')
+
+        # With time_from_starts
+        self.get_frame_mock.reset_mock()
+        trajectory = JointTrajectory()
+        for _ in range(3):
+            trajectory.points.append(JointTrajectoryPoint())
+        self.transform_base_trajectory_mock.return_value = trajectory
+        goal = mobile_base.create_follow_trajectory_goal(poses, [3.0, 6.0])
+
+        self.get_frame_mock.assert_called_with('map')
+        self.assertEqual(len(goal.points), 2)
+        self.assertAlmostEqual(goal.points[0].time_from_start.sec + goal.points[0].time_from_start.nanosec * 1e-9, 3.0)
+        self.assertAlmostEqual(goal.points[1].time_from_start.sec + goal.points[1].time_from_start.nanosec * 1e-9, 6.0)
+
+    def test_execute(self):
+        """Test MobileBase.execute()"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+
+        mock_action_client = self.action_client_mock_cls.return_value
+        mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
+        mock_client_send_goal = mock_client_send_goal_async.result.return_value
+        mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
+
+        mock_client_get_result = mock_client_get_result_async.result.return_value
+        mock_client_get_result.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
+
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+
+        input_goal = PoseStamped()
+        mobile_base.execute(input_goal)
+        action_goal = mock_action_client.send_goal_async.call_args[0][0]
+        self.assertEqual(action_goal.pose, input_goal)
+
+        mobile_base.execute(JointTrajectory())
+        self.traj_controller_mock.return_value.submit.assert_called_with(JointTrajectory())
+
+        with self.assertRaises(ValueError):
+            mobile_base.execute('hoge')
+
+    def test_is_moving(self):
+        """Test MobileBase.is_moving()"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+
+        mock_action_client = self.action_client_mock_cls.return_value
+        mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
+        mock_client_send_goal = mock_client_send_goal_async.result.return_value
+        mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
+        mock_client_get_result = mock_client_get_result_async.result.return_value
+        mock_follow_client = self.traj_controller_mock.return_value
+
+        # mobile_base.execute is not called
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+        self.assertFalse(mobile_base.is_moving())
+
+        # Send pose
+        mobile_base.execute(PoseStamped())
+        mock_client_get_result.status = action_msgs.GoalStatus.STATUS_EXECUTING
+        self.assertTrue(mobile_base.is_moving())
+
+        mock_client_get_result.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
+        self.assertFalse(mobile_base.is_moving())
+
+        # Send trajetory
+        mobile_base.execute(JointTrajectory())
+        mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_EXECUTING
+        self.assertTrue(mobile_base.is_moving())
+
+        mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_SUCCEEDED
+        self.assertFalse(mobile_base.is_moving())
+
+    def test_is_succeeded(self):
+        """Test MobileBase.is_succeeded()"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+
+        mock_action_client = self.action_client_mock_cls.return_value
+        mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
+        mock_client_send_goal = mock_client_send_goal_async.result.return_value
+        mock_follow_client = self.traj_controller_mock.return_value
+
+        # mobile_base.execute is not called
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+        self.assertFalse(mobile_base.is_succeeded())
+
+        # Send pose
+        mobile_base.execute(PoseStamped())
+        mock_client_send_goal.status = action_msgs.GoalStatus.STATUS_EXECUTING
+        self.assertFalse(mobile_base.is_succeeded())
+
+        mock_client_send_goal.status = action_msgs.GoalStatus.STATUS_SUCCEEDED
+        self.assertTrue(mobile_base.is_succeeded())
+
+        # Send trajetory
+        mobile_base.execute(JointTrajectory())
+        mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_EXECUTING
+        self.assertFalse(mobile_base.is_succeeded())
+
+        mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_SUCCEEDED
+        self.assertTrue(mobile_base.is_succeeded())
+
+    def test_cancel_goal(self):
+        """Test MobileBase.cancel_goal"""
+        robot = Robot()  # noqa: F841
+
+        self.get_entry_mock.return_value = {
+            'navigation_action': '/move_base/move',
+            'follow_trajectory_action': '/omni_base_controller',
+            'pose_topic': '/global_pose',
+            'joint_states_topic': '/joint_states',
+        }
+
+        mock_action_client = self.action_client_mock_cls.return_value
+        mock_client_send_goal_async = mock_action_client.send_goal_async.return_value
+        mock_client_send_goal = mock_client_send_goal_async.result.return_value
+        mock_client_get_result_async = mock_client_send_goal.get_result_async.return_value
+        mock_client_get_result = mock_client_get_result_async.result.return_value
+        mock_follow_client = self.traj_controller_mock.return_value
+
+        # Cancel without goal
+        mobile_base = hsrb_interface.mobile_base.MobileBase('omni_base')
+        mobile_base.cancel_goal()
+
+        mock_action_client.cancel_goal.assert_not_called()
+        mock_follow_client.cancel.assert_not_called()
+
+        # Send pose and cancel
+        mobile_base.execute(PoseStamped())
+        mock_client_get_result.status = action_msgs.GoalStatus.STATUS_EXECUTING
+        mobile_base.cancel_goal()
+
+        mock_client_send_goal.cancel_goal_async.assert_called_once_with()
+        mock_follow_client.cancel.assert_not_called()
+
+        # Send trajectory and cancel
+        mobile_base.execute(JointTrajectory())
+        mock_follow_client.get_state.return_value = action_msgs.GoalStatus.STATUS_EXECUTING
+        mobile_base.cancel_goal()
+
+        mock_follow_client.cancel.assert_called_once_with()

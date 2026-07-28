@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -26,56 +26,54 @@
 """Unittest for hsrb_interface.text_to_speech module"""
 from unittest.mock import patch
 
+import _testing as testing
 import hsrb_interface
 import hsrb_interface.exceptions
+from hsrb_interface.robot import Robot
 import hsrb_interface.text_to_speech
-from nose.tools import eq_
-from nose.tools import raises
 import rclpy
 from tmc_voice_msgs.msg import Voice
 
 
-@patch('hsrb_interface.Robot._connecting')
-@patch('hsrb_interface.settings.get_entry')
-@patch('rclpy.node.Node.create_publisher')
-def test_text_to_speech(mock_pub_class, mock_get_entry, mock_connecting):
-    """Test simple usage of TTS object."""
-    rclpy.init()
-    robot = hsrb_interface.Robot()  # noqa: F841
-    mock_connecting.return_value = True
+class TextToSpeechTest(testing.RosMockTestCase):
 
-    tts = hsrb_interface.text_to_speech.TextToSpeech('default_tts')
+    def setUp(self):
+        super().setUp()
 
-    mock_get_entry.return_value = {"topic": "foo"}
-    mock_get_entry.called_with_args("text_to_speech", "default_tts")
-    mock_pub_class.called_with_args("foo", Voice, queue_size=0)
-    mock_pub_instance = mock_pub_class.return_value
+        patcher = patch("rclpy.node.Node.create_publisher")
+        self.publisher_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
-    eq_(tts.language, tts.JAPANESE)
-    tts.language = tts.ENGLISH
-    eq_(tts.language, tts.ENGLISH)
+    def test_text_to_speech(self):
+        """Test simple usage of TTS object."""
+        rclpy.init()
+        robot = Robot()  # noqa: F841
 
-    expected_msg = Voice()
-    expected_msg.interrupting = False
-    expected_msg.queueing = False
-    expected_msg.language = False
-    expected_msg.sentence = "Hello, World!"
-    tts.say(u"Hello, World!")
-    mock_pub_instance.called_with_args(expected_msg)
+        self.get_entry_mock.return_value = {"topic": "foo"}
 
+        tts = hsrb_interface.text_to_speech.TextToSpeech('default_tts')
 
-@raises(hsrb_interface.exceptions.InvalidLanguageError)
-@patch('hsrb_interface.Robot._connecting')
-@patch('hsrb_interface.settings.get_entry')
-@patch('rclpy.node.Node.create_publisher')
-def test_invalid_language_error(mock_pub_class, mock_get_entry,
-                                mock_connecting):
-    """TTS object should refuse invalid language."""
-    robot = hsrb_interface.Robot()  # noqa: F841
-    mock_connecting.return_value = True
+        self.get_entry_mock.assert_called_with("text_to_speech", "default_tts")
+        self.publisher_mock.assert_called_with(Voice, "foo", 0)
+        mock_pub_instance = self.publisher_mock.return_value
 
-    tts = hsrb_interface.text_to_speech.TextToSpeech('default_tts')
+        self.assertEqual(tts.language, tts.JAPANESE)
+        tts.language = tts.ENGLISH
+        self.assertEqual(tts.language, tts.ENGLISH)
 
-    mock_get_entry.return_value = {"topic": "foo"}
+        expected_msg = Voice()
+        expected_msg.interrupting = False
+        expected_msg.queueing = False
+        expected_msg.language = Voice.ENGLISH
+        expected_msg.sentence = "Hello, World!"
+        tts.say(u"Hello, World!")
+        mock_pub_instance.publish.assert_called_with(expected_msg)
 
-    tts.language = -1
+    def __test_invalid_language_error(self):
+        """TTS object should refuse invalid language."""
+        with self.assertRaises(hsrb_interface.exceptions.InvalidLanguageError):
+            self.get_entry_mock.return_value = {"topic": "foo"}
+
+            tts = hsrb_interface.text_to_speech.TextToSpeech('default_tts')
+
+            tts.language = -1

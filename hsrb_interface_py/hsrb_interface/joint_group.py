@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -26,13 +26,13 @@
 # vim: fileencoding=utf-8
 """This module contains classes and functions to move joints."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
+import asyncio
+from dataclasses import dataclass
+import itertools
 import math
 import sys
+from typing import Optional
+from typing import Union
 import warnings
 
 from action_msgs.msg import GoalStatus
@@ -52,8 +52,11 @@ import tf_transformations as T
 
 from tmc_manipulation_msgs.msg import BaseMovementType
 
+from tmc_planning_msgs.msg import HandGoals
 from tmc_planning_msgs.msg import JointPosition
+from tmc_planning_msgs.msg import LinearConstraint
 from tmc_planning_msgs.msg import TaskSpaceRegion
+from tmc_planning_msgs.msg import TaskSpaceRegions
 from tmc_planning_msgs.srv import PlanWithHandGoals
 from tmc_planning_msgs.srv import PlanWithHandLine
 from tmc_planning_msgs.srv import PlanWithJointGoals
@@ -91,6 +94,13 @@ _PLANNING_GOAL_DEVIATION = 0.3
 
 # Timeout to receive a tf message [sec]
 _TF_TIMEOUT = 5.0
+
+
+@dataclass
+class HandLineGoal:
+    frame_id: str
+    axis: geometry.Vector3
+    distance: float
 
 
 def _normalize_np(vec):
@@ -214,17 +224,8 @@ class JointGroup(robot.Item):
         super(JointGroup, self).__init__()
         self._setting = settings.get_entry('joint_group', name)
         self._position_control_clients = []
-        arm_config = self._setting['arm_controller_prefix']
-        self._position_control_clients.append(
-            trajectory.TrajectoryController(arm_config))
-        head_config = self._setting['head_controller_prefix']
-        self._position_control_clients.append(
-            trajectory.TrajectoryController(head_config))
-        """
-        hand_config = self._setting["hand_controller_prefix"]
-        self._position_control_clients.append(
-            trajectory.TrajectoryController(hand_config,self._node ))
-        """
+        for controller in self._setting['joint_trajectory_controllers']:
+            self._position_control_clients.append(trajectory.TrajectoryController(controller))
         base_config = self._setting["omni_base_controller_prefix"]
         self._base_client = trajectory.TrajectoryController(
             base_config, "base_coordinates")
@@ -329,8 +330,9 @@ class JointGroup(robot.Item):
     def joint_weights(self, value):
         if not isinstance(value, dict):
             raise ValueError("value should be dictionary")
+        joint_names = self.joint_names
         for key, weight in value.items():
-            if key not in self._setting['motion_planning_joints']:
+            if key not in joint_names:
                 raise ValueError(key + " is not in motion planning joints")
             if float(weight) <= 0.0:
                 raise ValueError("weight should be positive")
@@ -435,19 +437,19 @@ class JointGroup(robot.Item):
 
     def _set_constraint_tsrs(self, req):
         if len(self._constraint_tsrs) > 0:
-            # It's important to insert tsr here
-            # This request variable is also present in hand goals, so you should insert tsr constraints in the same way
-            req.constraint_tsrs = self._constraint_tsrs
-            # When constraining only with posture transition, it's necessary to allow the cart to move, even if temporarily
-            # This process is unnecessary if it's not a gaze transition
+            # It is important to insert tsr here
+            # This request variable is also present in hand goal, etc., so you should add tsr constraints in the same way
+            req.constraint_tsrs_seq = [TaskSpaceRegions(tsrs=self._constraint_tsrs)]
+            # When applying constraints only for posture transitions, it is necessary to allow the cart to move, even if temporarily
+            # This process is unnecessary unless it is for gaze transitions
             #
-            # Although IK is being solved in the middle of the process, IK itself will result in an error if there are less than 6 degrees of freedom
-            # I'm starting to feel that solving IK for constraints with CBiRRT2 is strange, but what should I do?
+            # During the process, IK is being solved, but IK itself results in an error if there are fewer than 6 degrees of freedom
+            # I'm starting to feel that solving IK for constraints in CBiRRT2 is strange, but what should I do...
             # If you want to implement without using IK, comment out here +
             # In ConstrainToTsr of tmc_manipulation_planner/tmc_robot_planner/src/robot_cbirrt_planner.cpp
-            # Immediately return false; in the else part of CalcDistanceToTsr +
+            # In the else part of CalcDistanceToTsr, immediately return false; +
             # Increase _PLANNING_MAX_ITERATION by about one digit
-            # It's unclear which performs better, with or without using IK
+            # It is unclear which performs better, with or without using IK
             #
             if req.base_movement_type.val is BaseMovementType.NONE:
                 # Only PlanWithJointGoalsRequest is set to NONE in _generate_planning_request
@@ -491,8 +493,7 @@ class JointGroup(robot.Item):
             msg = "Passive joint(s): [{0}]".format(', '.join(intersected))
             raise ValueError(msg)
 
-        req = self._generate_planning_request(PlanWithJointGoals.Request)
-        req.use_joints = joint_names
+        req = self._generate_planning_request(PlanWithJointGoals.Request, joint_names)
         for joint_positions in joint_positions_seq:
             if len(joint_names) != len(joint_positions):
                 raise ValueError("The number of joint_names and joint_positions are different")
@@ -616,29 +617,37 @@ class JointGroup(robot.Item):
         return self._change_joint_state(joint_names, [joint_positions], plan_only)
 
     def move_to_neutral(self, plan_only=False):
-        """Move joints to neutral(initial) pose of a robot."""
-        goals = {
-            'arm_lift_joint': 0.0,
-            'arm_flex_joint': 0.0,
-            'arm_roll_joint': 0.0,
-            'wrist_flex_joint': -1.57,
-            'wrist_roll_joint': 0.0,
-            'head_pan_joint': 0.0,
-            'head_tilt_joint': 0.0,
-        }
+        """Move joints to neutral(initial) pose of a robot.
+
+        Args:
+            plan_only (bool): Not execute the trajectory when this arg is ``True``
+        Returns:
+            constrained_traj (trajectory_msgs.msg.JointTrajectory): A planned trajectory
+        Raises:
+            ValueError: No neutral_joint_positions settings
+        """
+        if 'neutral_joint_positions' in self._setting:
+            goals = self._setting['neutral_joint_positions']
+        else:
+            raise ValueError("No neutral_joint_positions settings")
+
         return self.move_to_joint_positions(goals, plan_only)
 
     def move_to_go(self, plan_only=False):
-        """Move joints to a suitable pose for moving a mobile base."""
-        goals = {
-            'arm_flex_joint': 0.0,
-            'arm_lift_joint': 0.0,
-            'arm_roll_joint': -1.57,
-            'wrist_flex_joint': -1.57,
-            'wrist_roll_joint': 0.0,
-            'head_pan_joint': 0.0,
-            'head_tilt_joint': 0.0
-        }
+        """Move joints to a suitable pose for moving a mobile base.
+
+        Args:
+            plan_only (bool): Not execute the trajectory when this arg is ``True``
+        Returns:
+            constrained_traj (trajectory_msgs.msg.JointTrajectory): A planned trajectory
+        Raises:
+            ValueError: No base_moving_joint_positions settings
+        """
+        if 'base_moving_joint_positions' in self._setting:
+            goals = self._setting['base_moving_joint_positions']
+        else:
+            raise ValueError("No base_moving_joint_positions settings")
+
         return self.move_to_joint_positions(goals, plan_only)
 
     def execute(self, trajectory):
@@ -714,12 +723,19 @@ class JointGroup(robot.Item):
         if ref_frame_id is None:
             ref_frame_id = settings.get_frame('base')
 
-        transform = utils.get_transform(
-            self._node,
-            self._tf2_buffer,
-            ref_frame_id,
-            self._end_effector_frame,
-            self._tf_timeout)
+        tf_future = self._tf2_buffer.wait_for_transform_async(
+            target_frame=ref_frame_id,
+            source_frame=self._end_effector_frame,
+            time=rclpy.time.Time()
+        )
+        rclpy.spin_until_future_complete(
+            self._node, tf_future, timeout_sec=self._tf_timeout)
+
+        transform = asyncio.run(self._tf2_buffer.lookup_transform_async(
+            target_frame=ref_frame_id,
+            source_frame=self._end_effector_frame,
+            time=rclpy.time.Time()
+        ))
 
         return geometry.transform_to_tuples(transform.transform)
 
@@ -740,6 +756,68 @@ class JointGroup(robot.Item):
             odom_to_ref_ros.transform)
         return geometry.tuples_to_pose(odom_to_ref_tuples)
 
+    def move_end_effector_poses(self,
+                                poses: dict[str, Union[geometry.Pose, list[geometry.Pose]]],
+                                ref_frame_id: Optional[str] = None,
+                                plan_only: Optional[bool] = False):
+        """Move end effector to given poses.
+
+        Args
+            pose (Dict[str, Union]):
+                A dict of the target pose(s) of the end effector frame.
+            ref_frame_id (str): A base frame of an end effector.
+                The default is the robot frame(```base_footprint``).
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
+        Returns:
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
+        """
+        if ref_frame_id is None:
+            ref_frame_id = settings.get_frame('base')
+
+        odom_to_ref_pose = self._lookup_odom_to_ref(ref_frame_id)
+        odom_to_ref = geometry.pose_to_tuples(odom_to_ref_pose)
+
+        ref_frame_ids = []
+        origin_to_hand_goals_list = []
+        for name, value in poses.items():
+            if isinstance(value, list):
+                ref_to_hand_poses = value
+            else:
+                ref_to_hand_poses = [value]
+            ref_frame_ids.append(name)
+            origin_to_hand_golas = []
+            for ref_to_hand in ref_to_hand_poses:
+                odom_to_hand = geometry.multiply_tuples(odom_to_ref, ref_to_hand)
+                origin_to_hand_golas.append(geometry.tuples_to_pose(odom_to_hand))
+            origin_to_hand_goals_list.append(origin_to_hand_golas)
+
+        req = self._generate_planning_request_with_end_effector_frames(
+            PlanWithHandGoals.Request, ref_frame_ids)
+
+        for poses in itertools.product(*origin_to_hand_goals_list):
+            hand_goals = HandGoals()
+            hand_goals.ref_frame_ids = ref_frame_ids
+            hand_goals.origin_to_hand_goals = poses
+            req.hand_goals_seq.append(hand_goals)
+
+        req = self._set_constraint_tsrs(req)
+
+        service_name = self._setting['plan_with_hand_goals_service']
+        plan_service = self._node.create_client(PlanWithHandGoals, service_name)
+        future = plan_service.call_async(req)
+        res = utils.wait_until_complete(self._node, future)
+        if res.error_code.val != MoveItErrorCodes.SUCCESS:
+            msg = "Fail to plan move_endpoint(" + str(res.error_code.val) + ")"
+            raise exceptions.MotionPlanningError(msg, res.error_code)
+        res.base_solution.header.frame_id = settings.get_frame('odom')
+        constrained_traj = self._constrain_trajectories(res.solution, res.base_solution)
+        if plan_only:
+            return constrained_traj
+        else:
+            self._execute_trajectory(constrained_traj)
+
     def move_end_effector_pose(self, pose, ref_frame_id=None, plan_only=False):
         """Move an end effector to a given pose.
 
@@ -754,35 +832,50 @@ class JointGroup(robot.Item):
             constrained_traj (trajectory_msgs.msg.JointTrajectory):
                 A planned trajectory
         """
-        # Default is the robot frame (the base frame)
-        if ref_frame_id is None:
-            ref_frame_id = settings.get_frame('base')
+        return self.move_end_effector_poses(
+            {self._end_effector_frame: pose},
+            ref_frame_id=ref_frame_id,
+            plan_only=plan_only)
 
-        if isinstance(pose, list):
-            ref_to_hand_poses = pose
-        else:
-            ref_to_hand_poses = [pose]
+    def move_end_effectors_by_line(self, goals: list[HandLineGoal], plan_only: bool = False):
+        """Move end effectors along with lines in a 3D space.
 
-        odom_to_ref_pose = self._lookup_odom_to_ref(ref_frame_id)
-        odom_to_ref = geometry.pose_to_tuples(odom_to_ref_pose)
-        odom_to_hand_poses = []
-        for ref_to_hand in ref_to_hand_poses:
-            odom_to_hand = geometry.multiply_tuples(odom_to_ref, ref_to_hand)
-            odom_to_hand_poses.append(geometry.tuples_to_pose(odom_to_hand))
+        Args:
+            goals (List[HandLineGoal]):
+                A list of target line movement of end effectors.
+            plan_only (bool):
+                Not execute the trajectory when this arg is ``True``
+        Returns:
+            constrained_traj (trajectory_msgs.msg.JointTrajectory):
+                A planned trajectory
+        """
+        for goal in goals:
+            axis_length = np.linalg.norm(np.array(goal.axis, dtype='float64'))
+            if axis_length < sys.float_info.epsilon:
+                raise ValueError("The axis is zero vector.")
+            if goal.frame_id not in self._end_effector_frames:
+                msg = "ref_frame_id must be one of end-effector frames({0})"
+                raise ValueError(msg.format(self._end_effector_frames))
 
-        req = self._generate_planning_request(PlanWithHandGoals.Request)
-        req.origin_to_hand_goals = odom_to_hand_poses
-        req.ref_frame_id = self._end_effector_frame
+        req = self._generate_planning_request_with_end_effector_frames(
+            PlanWithHandLine.Request, [goal.frame_id for goal in goals])
+        for goal in goals:
+            goal_msg = LinearConstraint()
+            goal_msg.axis.x = float(goal.axis[0])
+            goal_msg.axis.y = float(goal.axis[1])
+            goal_msg.axis.z = float(goal.axis[2])
+            goal_msg.local_origin_of_axis = True
+            goal_msg.end_frame_id = goal.frame_id
+            goal_msg.distance = goal.distance
+            req.goals.append(goal_msg)
 
-        req = self._set_constraint_tsrs(req)
-
-        service_name = self._setting['plan_with_hand_goals_service']
-        plan_service = self._node.create_client(
-            PlanWithHandGoals, service_name)
+        service_name = self._setting['plan_with_hand_line_service']
+        plan_service = self._node.create_client(PlanWithHandLine, service_name)
         future = plan_service.call_async(req)
-        res = utils.wait_until_complete(self._node, future)
+        rclpy.spin_until_future_complete(self._node, future)
+        res = future.result()
         if res.error_code.val != MoveItErrorCodes.SUCCESS:
-            msg = "Fail to plan move_endpoint(" + str(res.error_code.val) + ")"
+            msg = "Fail to plan move_hand_line"
             raise exceptions.MotionPlanningError(msg, res.error_code)
         res.base_solution.header.frame_id = settings.get_frame('odom')
         constrained_traj = self._constrain_trajectories(res.solution,
@@ -807,12 +900,8 @@ class JointGroup(robot.Item):
             constrained_traj (trajectory_msgs.msg.JointTrajectory):
                 A planned trajectory
         """
-        axis_length = np.linalg.norm(np.array(axis, dtype='float64'))
-        if axis_length < sys.float_info.epsilon:
-            raise ValueError("The axis is zero vector.")
-        if ref_frame_id is None:
-            end_effector_frame = self._end_effector_frame
-        else:
+        end_effector_frame = self._end_effector_frame
+        if ref_frame_id is not None:
             msg = ' '.join(["`ref_frame_id` argument is deprecated."
                             "Use `end_effector_frame` attribute instead."])
             warnings.warn(msg, exceptions.DeprecationWarning)
@@ -822,29 +911,12 @@ class JointGroup(robot.Item):
             else:
                 end_effector_frame = ref_frame_id
 
-        req = self._generate_planning_request(PlanWithHandLine.Request)
-        req.axis.x = float(axis[0])
-        req.axis.y = float(axis[1])
-        req.axis.z = float(axis[2])
-        req.local_origin_of_axis = True
-        req.ref_frame_id = end_effector_frame
-        req.goal_value = distance
-
-        service_name = self._setting['plan_with_hand_line_service']
-        plan_service = self._node.create_client(PlanWithHandLine, service_name)
-        future = plan_service.call_async(req)
-        rclpy.spin_until_future_complete(self._node, future)
-        res = future.result()
-        if res.error_code.val != MoveItErrorCodes.SUCCESS:
-            msg = "Fail to plan move_hand_line"
-            raise exceptions.MotionPlanningError(msg, res.error_code)
-        res.base_solution.header.frame_id = settings.get_frame('odom')
-        constrained_traj = self._constrain_trajectories(res.solution,
-                                                        res.base_solution)
-        if plan_only:
-            return constrained_traj
-        else:
-            self._execute_trajectory(constrained_traj)
+        return self.move_end_effectors_by_line(
+            [HandLineGoal(
+                frame_id=end_effector_frame,
+                axis=axis,
+                distance=distance)],
+            plan_only=plan_only)
 
     def move_end_effector_by_arc(self, center, angle, ref_frame_id=None, plan_only=False):
         """Move an end effector along with an arc in a 3D space.
@@ -896,9 +968,10 @@ class JointGroup(robot.Item):
         goal_tsr.min_bounds = [0.0, 0.0, 0.0, 0.0, 0.0, angle]
         goal_tsr.max_bounds = [0.0, 0.0, 0.0, 0.0, 0.0, angle]
 
-        req = self._generate_planning_request(PlanWithTsrConstraints.Request)
-        req.constraint_tsrs = [rotation_tsr]
-        req.goal_tsrs = [goal_tsr]
+        req = self._generate_planning_request_with_end_effector_frames(
+            PlanWithTsrConstraints.Request, [self._end_effector_frame])
+        req.constraint_tsrs_seq = [TaskSpaceRegions(tsrs=[rotation_tsr])]
+        req.goal_tsrs_seq = [TaskSpaceRegions(tsrs=[goal_tsr])]
 
         service_name = self._setting['plan_with_constraints_service']
         plan_service = self._node.create_client(
@@ -921,7 +994,8 @@ class JointGroup(robot.Item):
                              odom_to_robot_pose,
                              initial_joint_state,
                              collision_env):
-        req = self._generate_planning_request(PlanWithTsrConstraints.Request)
+        req = self._generate_planning_request_with_end_effector_frames(
+            PlanWithTsrConstraints.Request, [self._end_effector_frame])
         req.origin_to_basejoint = odom_to_robot_pose
         req.initial_joint_state = initial_joint_state
         if collision_env is not None:
@@ -1030,22 +1104,22 @@ class JointGroup(robot.Item):
 
         # Goal constraint
         tsr_g = TaskSpaceRegion()
-        tsr_g.end_frame_id = bytes(self.end_effector_frame)
+        tsr_g.end_frame_id = self.end_effector_frame
         tsr_g.origin_to_tsr = geometry.tuples_to_pose(origin_to_pose2)
         tsr_g.tsr_to_end = geometry.tuples_to_pose(geometry.pose())
-        tsr_g.min_bounds = [0, 0, 0, 0, 0, 0]
-        tsr_g.max_bounds = [0, 0, 0, 0, 0, 0]
+        tsr_g.min_bounds = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        tsr_g.max_bounds = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
         # Line constraint
         tsr_c = TaskSpaceRegion()
-        tsr_c.end_frame_id = bytes(self.end_effector_frame)
+        tsr_c.end_frame_id = self.end_effector_frame
         tsr_c.origin_to_tsr = geometry.tuples_to_pose(origin_to_tsr)
         tsr_c.tsr_to_end = geometry.tuples_to_pose(tsr_to_pose1)
-        tsr_c.min_bounds = [0, 0, 0, -math.pi, -math.pi, -math.pi]
-        tsr_c.max_bounds = [distance, 0, 0, math.pi, math.pi, math.pi]
+        tsr_c.min_bounds = [0.0, 0.0, 0.0, -math.pi, -math.pi, -math.pi]
+        tsr_c.max_bounds = [distance, 0.0, 0.0, math.pi, math.pi, math.pi]
 
-        req.goal_tsrs = [tsr_g]
-        req.constraint_tsrs = [tsr_c]
+        req.goal_tsrs_seq = [TaskSpaceRegions(tsrs=[tsr_g])]
+        req.constraint_tsrs_seq = [TaskSpaceRegions(tsrs=[tsr_c])]
 
         service_name = self._setting['plan_with_constraints_service']
 
@@ -1162,7 +1236,7 @@ class JointGroup(robot.Item):
             raise RuntimeError("Cannot gaze the given point.")
         return self.move_to_joint_positions(result, plan_only)
 
-    def _generate_planning_request(self, request_type):
+    def _generate_planning_request(self, request_type, joint_names):
         """Generate a planning request and assign common parameters to it.
 
         Args:
@@ -1173,6 +1247,8 @@ class JointGroup(robot.Item):
                     - tmc_planning_msgs.srv.PlanWithHandLineRequest
                     - tmc_planning_msgs.srv.PlanWithJointGoalsRequest
                     - tmc_planning_msgs.srv.PlanWithTsrConstraintsRequest
+            joint_names (List[str]):
+                A list of using joints.
 
         Retruns:
             tmc_planning_msgs.srv.PlanWithXXX:
@@ -1192,8 +1268,8 @@ class JointGroup(robot.Item):
 
             request.attached_objects = self._collision_world.attached_objects
 
-            # If there are objects in attached_objects that are not included in request.environment_before_planning
-            # The motion planning will fail, so add them here
+            # If objects not included in request.environment_before_planning are in attached_objects
+            # Motion planning will fail, so add them here
             for attached_object in self._collision_world.attached_objects:
                 already_known_object_flag = False
                 for known_object in request.environment_before_planning.collision_objects:
@@ -1206,19 +1282,17 @@ class JointGroup(robot.Item):
 
         if request_type is PlanWithJointGoals.Request:
             request.base_movement_type.val = BaseMovementType.NONE
+            request.use_joints = joint_names
             return request
         else:
-            use_joints = {'wrist_flex_joint',
-                          'wrist_roll_joint',
-                          'arm_roll_joint',
-                          'arm_flex_joint',
-                          'arm_lift_joint'}
+            use_joints = set(joint_names)
             if self._looking_hand_constraint:
                 use_joints.update(
                     self._setting['looking_hand_constraint']['use_joints'])
                 request.extra_goal_constraints.append(
                     self._setting['looking_hand_constraint']['plugin_name'])
             request.use_joints = use_joints
+            # TODO(Takeshita) 台車なし設定を選べるようにする
             request.base_movement_type.val = BaseMovementType.PLANAR
             request.uniform_bound_sampling = False
             request.deviation_for_bound_sampling = _PLANNING_GOAL_DEVIATION
@@ -1228,6 +1302,16 @@ class JointGroup(robot.Item):
             request.weight = [self._linear_weight, self._angular_weight]
             request.weight.extend(self._joint_weights.values())
             return request
+
+    def _generate_planning_request_with_end_effector_frames(self, request_type, frame_names):
+        joint_names = set()
+        if "use_joints_for_moving_end_effector" in self._setting:
+            for name in frame_names:
+                if name in self._setting["use_joints_for_moving_end_effector"]:
+                    joints = self._setting["use_joints_for_moving_end_effector"][name]
+                    joint_names.update(joints)
+
+        return self._generate_planning_request(request_type, joint_names)
 
     def _constrain_trajectories(self, joint_trajectory, base_trajectory=None):
         """Apply constraints to given trajectories.
@@ -1243,6 +1327,8 @@ class JointGroup(robot.Item):
         Raises:
             TrajectoryFilterError:
                 Failed to execute trajectory-filtering
+            ValueError:
+                The value of use_base_timeopt must be True
         """
         if base_trajectory:
             odom_base_trajectory = trajectory.transform_base_trajectory(
@@ -1263,6 +1349,8 @@ class JointGroup(robot.Item):
                     odom_base_trajectory.points[0].positions
             filtered_merged_traj = trajectory.hsr_timeopt_filter(
                 merged_traj, start_state, self._node)
+        else:
+            raise ValueError("The value of use_base_timeopt must be True.")
         return filtered_merged_traj
 
     def _execute_trajectory(self, joint_traj, sync=True):

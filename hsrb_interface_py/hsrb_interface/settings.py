@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -29,17 +29,12 @@
 This module is intended to internal use only.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import json
+import os
 
 from . import exceptions
 
 VERSION = "1.0.0"
-
 
 _HSRB_SETTINGS = """
 {
@@ -63,22 +58,25 @@ _HSRB_SETTINGS = """
         }
     },
     "trajectory": {
-            "impedance_control": "/hsrb/impedance_control",
-            "constraint_filter_service": "/trajectory_filter/filter_trajectory_with_constraints",
-            "timeopt_filter_service": "/hsrb/omni_base_timeopt_filter",
-            "whole_timeopt_filter_service": "/timeopt_filter_node/filter_trajectory",
-            "caster_joint": "base_roll_joint",
-            "filter_timeout": 30.0,
-            "action_timeout": 3.0,
-            "watch_rate": 30.0
+        "impedance_control": "/hsrb/impedance_control",
+        "constraint_filter_service": "/trajectory_filter/filter_trajectory_with_constraints",
+        "whole_timeopt_filter_service": "/timeopt_filter_node/filter_trajectory",
+        "caster_joint": "base_roll_joint",
+        "filter_timeout": 30.0,
+        "action_timeout": 3.0,
+        "watch_rate": 30.0
     },
     "joint_group": {
         "whole_body": {
-            "class": ["joint_group", "JointGroup"],
+            "class": [
+                "joint_group",
+                "JointGroup"
+            ],
             "joint_states_topic": "/joint_states",
-            "arm_controller_prefix": "/arm_trajectory_controller",
-            "head_controller_prefix": "/head_trajectory_controller",
-            "hand_controller_prefix": "/gripper_controller",
+            "joint_trajectory_controllers": [
+                "/arm_trajectory_controller",
+                "/head_trajectory_controller"
+            ],
             "omni_base_controller_prefix": "/omni_base_controller",
             "plan_with_constraints_service": "/plan_with_constraints",
             "plan_with_hand_goals_service": "/plan_with_hand_goals",
@@ -96,32 +94,65 @@ _HSRB_SETTINGS = """
             ],
             "looking_hand_constraint": {
                 "plugin_name": "hsrb_planner_plugins/LookHand",
-                "use_joints": ["head_pan_joint", "head_tilt_joint"]
+                "use_joints": [
+                    "head_pan_joint",
+                    "head_tilt_joint"
+                ]
             },
-            "motion_planning_joints": [
-                "wrist_flex_joint",
-                "wrist_roll_joint",
-                "arm_roll_joint",
-                "arm_flex_joint",
-                "arm_lift_joint",
-                "hand_motor_joint",
-                "head_pan_joint",
-                "head_tilt_joint"
-            ]
+            "use_joints_for_moving_end_effector": {
+                "hand_palm_link" : [
+                    "wrist_flex_joint",
+                    "wrist_roll_joint",
+                    "arm_roll_joint",
+                    "arm_flex_joint",
+                    "arm_lift_joint"
+                ],
+                "hand_l_finger_vacuum_frame" : [
+                    "wrist_flex_joint",
+                    "wrist_roll_joint",
+                    "arm_roll_joint",
+                    "arm_flex_joint",
+                    "arm_lift_joint"
+                ]
+            },
+            "neutral_joint_positions": {
+                "arm_lift_joint": 0.0,
+                "arm_flex_joint": 0.0,
+                "arm_roll_joint": 0.0,
+                "wrist_flex_joint": -1.57,
+                "wrist_roll_joint": 0.0,
+                "head_pan_joint": 0.0,
+                "head_tilt_joint": 0.0
+            },
+            "base_moving_joint_positions": {
+                "arm_flex_joint": 0.0,
+                "arm_lift_joint": 0.0,
+                "arm_roll_joint": -1.57,
+                "wrist_flex_joint": -1.57,
+                "wrist_roll_joint": 0.0,
+                "head_pan_joint": 0.0,
+                "head_tilt_joint": 0.0
+            }
         }
     },
     "end_effector": {
         "gripper": {
-            "class": ["end_effector", "Gripper"],
-            "joint_names": ["hand_motor_joint"],
-            "prefix": "/gripper_controller",
-            "left_finger_joint_name": "hand_l_spring_proximal_joint",
-            "right_finger_joint_name": "hand_r_spring_proximal_joint"
+            "class": [
+                "end_effector",
+                "Gripper"
+            ],
+            "joint_names": [
+                "hand_motor_joint"
+            ],
+            "prefix": "/gripper_controller"
         }
     },
     "mobile_base": {
         "omni_base": {
-            "class": ["mobile_base", "MobileBase"],
+            "class": [
+                "mobile_base",
+                "MobileBase"
+            ],
             "navigation_action": "/move_base/move",
             "follow_trajectory_action": "/omni_base_controller",
             "pose_topic": "/global_pose",
@@ -132,27 +163,83 @@ _HSRB_SETTINGS = """
     },
     "text_to_speech": {
         "default_tts": {
-            "class": ["text_to_speech", "TextToSpeech"],
+            "class": [
+                "text_to_speech",
+                "TextToSpeech"
+            ],
             "topic": "/talk_request"
         }
     },
     "collision_world": {
         "global_collision_world": {
-            "class": ["collision_world", "CollisionWorld"],
+            "class": [
+                "collision_world",
+                "CollisionWorld"
+            ],
             "control_topic": "/collision_environment_server/collision_object",
             "environment_topic": "/collision_environment_server/environment",
             "trans_env_topic": "/collision_environment_server/transformed_environment",
             "set_frame_service": "/collision_environment_server/set_parameters",
-            "attaching_topic": "/attached_object_publisher/attaching_object_name",
-            "add_attaching_topic": "/attached_object_publisher/attaching_object_info",
-            "releasing_topic": "/attached_object_publisher/releasing_object_name",
-            "attached_info_topic": "/attached_object_publisher/attached_object"
+            "attached_object": {
+                "hand_palm_link": {
+                    "attaching_topic": "/attached_object_publisher/attaching_object_name",
+                    "add_attaching_topic": "/attached_object_publisher/attaching_object_info",
+                    "releasing_topic": "/attached_object_publisher/releasing_object_name",
+                    "attached_info_topic": "/attached_object_publisher/attached_object"
+                }
+            }
         }
     }
 }
 """
 
-_SETTINGS = json.loads(_HSRB_SETTINGS)
+
+def update_setting(update_settings):
+    """Update a robot settings from json data.
+
+    Args:
+        update_settings (dict): Update json data.
+    """
+    for outer_key in update_settings.keys():
+        if _SETTINGS[outer_key].keys() == update_settings[outer_key].keys():
+            # If the keys are the same, update each key
+            for inner_key in update_settings[outer_key].keys():
+                _SETTINGS[outer_key][inner_key].update(update_settings[outer_key][inner_key])
+        elif set(_SETTINGS[outer_key].keys()).isdisjoint(set(update_settings[outer_key].keys())):
+            # Overwrite if the keys are different
+            _SETTINGS[outer_key] = {}
+            _SETTINGS[outer_key] = update_settings[outer_key]
+        else:
+            # Update the existing keys and add the non-existent keys
+            for inner_key in update_settings[outer_key].keys():
+                if inner_key in _SETTINGS[outer_key].keys():
+                    _SETTINGS[outer_key][inner_key].update(update_settings[outer_key][inner_key])
+                else:
+                    _SETTINGS[outer_key][inner_key] = update_settings[outer_key][inner_key]
+
+
+def load_settings(setting_file_path=''):
+    """Load a robot settings from file.
+
+    Args:
+        setting_file_path (str): The path to configuraion file.
+
+    Raises:
+        hsrb_interface.exceptions.ResourceNotFoundError: Setting file is not found.
+    """
+    global _SETTINGS
+
+    _SETTINGS = json.loads(_HSRB_SETTINGS)
+
+    if setting_file_path:
+        if not os.path.exists(setting_file_path):
+            msg = "Setting file is not found"
+            raise exceptions.ResourceNotFoundError(msg)
+
+        with open(setting_file_path) as setting_file:
+            personal_setting = json.load(setting_file)
+
+            update_setting(personal_setting)
 
 
 def get_entry_by_name(name):
@@ -160,10 +247,6 @@ def get_entry_by_name(name):
 
     Args:
         name (str): A target resource name.
-
-    Returns:
-
-
     Raises:
         hsrb_interface.exceptions.ResourceNotFoundError: No such resource.
     """

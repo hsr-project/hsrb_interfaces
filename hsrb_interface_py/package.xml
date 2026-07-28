@@ -1,6 +1,6 @@
 <package format="3">
   <name>hsrb_interface_py</name>
-  <version>2.4.0</version>
+  <version>3.0.0</version>
   <description>HSR-B Python Interface</description>
 
   <maintainer email="xr-hsr-support@mail.toyota.co.jp">HSR Support</maintainer>
@@ -10,7 +10,6 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
-  <buildtool_depend>ament_cmake_nose</buildtool_depend>
 
   <build_depend>boost</build_depend>
   <build_depend>hsr_kinematics</build_depend>

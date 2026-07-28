@@ -1,0 +1,118 @@
+{
+    "robot": {
+        "test": {
+            "fullname": "test_robot"
+        }
+    },
+    "frame": {
+        "hand": {
+            "frame_id": [
+                "hand_left_link",
+                "hand_right_link"
+            ]
+        }
+    },
+    "joint_group": {
+        "whole_body": {
+            "joint_trajectory_controllers": [
+                "/arm_left_trajectory_controller",
+                "/arm_right_trajectory_controller",
+                "/head_trajectory_controller"
+            ],
+            "end_effector_frames": [
+                "hand_left_link",
+                "hand_right_link"
+            ],
+            "looking_hand_constraint": {},
+            "use_joints_for_moving_end_effector": {
+                "hand_left_link" : [
+                    "wrist_left_flex_joint",
+                    "wrist_left_roll_joint",
+                    "arm_left_roll_joint",
+                    "arm_left_flex_joint",
+                    "arm_left_lift_joint"
+                ],
+                "hand_right_link" : [
+                    "wrist_right_flex_joint",
+                    "wrist_right_roll_joint",
+                    "arm_right_roll_joint",
+                    "arm_right_flex_joint",
+                    "arm_right_lift_joint"
+                ]
+            },
+            "neutral_joint_positions": {
+                "arm_left_lift_joint": 0.0,
+                "arm_left_flex_joint": 0.0,
+                "arm_left_roll_joint": 0.0,
+                "wrist_left_flex_joint": 0.0,
+                "wrist_left_roll_joint": 0.0,
+                "arm_right_lift_joint": 0.0,
+                "arm_right_flex_joint": 0.0,
+                "arm_right_roll_joint": 0.0,
+                "wrist_right_flex_joint": 0.0,
+                "wrist_right_roll_joint": 0.0,
+                "head_pan_joint": 0.0,
+                "head_tilt_joint": 0.0
+            },
+            "base_moving_joint_positions": {
+                "arm_left_lift_joint": 0.0,
+                "arm_left_flex_joint": 0.0,
+                "arm_left_roll_joint": 0.0,
+                "wrist_left_flex_joint": 0.0,
+                "wrist_left_roll_joint": 0.0,
+                "arm_right_lift_joint": 0.0,
+                "arm_right_flex_joint": 0.0,
+                "arm_right_roll_joint": 0.0,
+                "wrist_right_flex_joint": 0.0,
+                "wrist_right_roll_joint": 0.0,
+                "head_pan_joint": 0.0,
+                "head_tilt_joint": 0.0
+            }
+        }
+    },
+    "end_effector": {
+        "left_gripper": {
+            "class": [
+                "end_effector",
+                "Gripper"
+            ],
+            "joint_names": [
+                "hand_left_motor_joint"
+            ],
+            "prefix": "/gripper_left_controller"
+        },
+        "right_gripper": {
+            "class": [
+                "end_effector",
+                "Gripper"
+            ],
+            "joint_names": [
+                "hand_right_motor_joint"
+            ],
+            "prefix": "/gripper_right_controller"
+        }
+    },
+    "collision_world": {
+        "global_collision_world": {
+            "class": [
+                "collision_world",
+                "CollisionWorldHSRF",
+                "hsrf_interface"
+            ],
+            "attached_object": {
+                "hand_left_link": {
+                    "attaching_topic": "/hand_left_attached_object_publisher/attaching_object_name",
+                    "add_attaching_topic": "/hand_left_attached_object_publisher/attaching_object_info",
+                    "releasing_topic": "/hand_left_attached_object_publisher/releasing_object_name",
+                    "attached_info_topic": "/hand_left_attached_object_publisher/attached_object"
+                },
+                "hand_right_link": {
+                    "attaching_topic": "/hand_right_attached_object_publisher/attaching_object_name",
+                    "add_attaching_topic": "/hand_right_attached_object_publisher/attaching_object_info",
+                    "releasing_topic": "/hand_right_attached_object_publisher/releasing_object_name",
+                    "attached_info_topic": "/hand_right_attached_object_publisher/attached_object"
+                }
+            }
+        }
+    }
+}

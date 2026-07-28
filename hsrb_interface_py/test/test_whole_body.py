@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -36,20 +36,23 @@ from unittest.mock import patch
 from unittest.mock import PropertyMock
 
 import _testing as testing
+from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_path
+from geometry_msgs.msg import Transform
 from geometry_msgs.msg import TransformStamped
 from hsrb_interface import geometry
+from hsrb_interface.joint_group import HandLineGoal
 from hsrb_interface.joint_group import JointGroup
 from hsrb_interface.robot import Robot
 from moveit_msgs.msg import MoveItErrorCodes
 
-from nose.tools import eq_
-from nose.tools import raises
-
 from sensor_msgs.msg import JointState
 from tmc_planning_msgs.msg import TaskSpaceRegion
+from tmc_planning_msgs.srv import PlanWithHandLine
 from tmc_planning_msgs.srv import PlanWithJointGoals
 from trajectory_msgs.msg import JointTrajectory
+from trajectory_msgs.msg import MultiDOFJointTrajectory
+from trajectory_msgs.msg import MultiDOFJointTrajectoryPoint
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -63,6 +66,8 @@ class WholeBodyTest(testing.RosMockTestCase):
 
         patcher = patch("hsrb_interface.trajectory.TrajectoryController")
         self.traj_controller_mock = patcher.start()
+        self.position_control_client_mock = MagicMock()
+        self.traj_controller_mock.return_value = self.position_control_client_mock
         self.addCleanup(patcher.stop)
 
         patcher = patch("hsrb_interface.trajectory.wait_controllers")
@@ -105,6 +110,11 @@ class WholeBodyTest(testing.RosMockTestCase):
         self.addCleanup(patcher.stop)
         self.create_client_mock = self.joint_group_node_mock_obj.create_client
 
+        patcher = patch(
+            "hsrb_interface.joint_group.JointGroup._constrain_trajectories")
+        self.constrain_trajectories_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
         def get_frame_side_effect(key):
             mapping = {
                 "map": {
@@ -126,9 +136,10 @@ class WholeBodyTest(testing.RosMockTestCase):
         self.joint_group_setting = {
             "class": ["joint_group", "JointGroup"],
             "joint_states_topic": "/joint_states",
-            "arm_controller_prefix": "/arm_trajectory_controller",
-            "head_controller_prefix": "/head_trajectory_controller",
-            "hand_controller_prefix": "/gripper_controller",
+            "joint_trajectory_controllers": [
+                "/arm_trajectory_controller",
+                "/head_trajectory_controller"
+            ],
             "omni_base_controller_prefix": "/omni_base_controller",
             "plan_with_constraints_service": "/plan_with_constraints",
             "plan_with_hand_goals_service": "/plan_with_hand_goals",
@@ -137,7 +148,8 @@ class WholeBodyTest(testing.RosMockTestCase):
             "timeout": 30.0,
             "end_effector_frames": [
                 "hand_palm_link",
-                "hand_l_finger_vacuum_frame"
+                "hand_l_finger_vacuum_frame",
+                "dummy_link"
             ],
             "rgbd_sensor_frame": "head_rgbd_sensor_link",
             "passive_joints": [
@@ -157,7 +169,19 @@ class WholeBodyTest(testing.RosMockTestCase):
                 "hand_motor_joint",
                 "head_pan_joint",
                 "head_tilt_joint"
-            ]
+            ],
+            "use_joints_for_moving_end_effector": {
+                "hand_palm_link": [
+                    "wrist_flex_joint",
+                    "wrist_roll_joint",
+                    "arm_roll_joint",
+                    "arm_flex_joint",
+                    "arm_lift_joint"
+                ],
+                "dummy_link": [
+                    "dummy_joint",
+                ]
+            },
         }
 
         self.trajectory_setting = {
@@ -260,6 +284,49 @@ class WholeBodyTest(testing.RosMockTestCase):
 
         return odom_to_robot_transform, odom_to_hand_transform
 
+    def test_joint_weights(self):
+        self.get_entry_mock.side_effect = [
+            self.joint_group_setting,
+            self.trajectory_setting,
+        ]
+
+        temp_joint_weights = {
+            'arm_lift_joint': 1.0,
+            'arm_roll_joint': 1.1,
+        }
+
+        whole_body = JointGroup('whole_body')
+        whole_body.joint_weights = temp_joint_weights
+
+        self.assertEqual(temp_joint_weights, whole_body.joint_weights)
+
+    def test_joint_weights_not_list(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+                self.trajectory_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.joint_weights = "hoge"
+
+    def test_joint_weights_not_active_joint(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+                self.trajectory_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.joint_weights = {'hoge': 1.0}
+
+    def test_joint_weights_not_positive_value_joint(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+                self.trajectory_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.joint_weights = {'arm_lift_joint': -1.0}
+
     def test_constraint_tsrs(self):
         self.get_entry_mock.side_effect = [
             self.joint_group_setting,
@@ -293,25 +360,25 @@ class WholeBodyTest(testing.RosMockTestCase):
 
         whole_body.constraint_tsrs = [constraint_tsr]
 
-        eq_(constraint_tsr, whole_body.constraint_tsrs[0])
+        self.assertEqual(constraint_tsr, whole_body.constraint_tsrs[0])
 
-    @raises(ValueError)
     def test_constraint_tsrs_not_list(self):
-        self.get_entry_mock.side_effect = [
-            self.joint_group_setting,
-            self.trajectory_setting,
-        ]
-        whole_body = JointGroup('whole_body')
-        whole_body.constraint_tsrs = "hoge"
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+                self.trajectory_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.constraint_tsrs = "hoge"
 
-    @raises(TypeError)
     def test_constraint_tsrs_not_tsr(self):
-        self.get_entry_mock.side_effect = [
-            self.joint_group_setting,
-            self.trajectory_setting,
-        ]
-        whole_body = JointGroup('whole_body')
-        whole_body.constraint_tsrs = ["hoge"]
+        with self.assertRaises(TypeError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+                self.trajectory_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.constraint_tsrs = ["hoge"]
 
     def test_move_to_joint_positions_ok(self):
         # Setup pre-conditions
@@ -335,6 +402,11 @@ class WholeBodyTest(testing.RosMockTestCase):
         type(plan_result_mock.result().error_code).val = error_code_mock
         type(plan_result_mock.result()).solution = solution_mock
         plan_service_client_mock.call_async.return_value = plan_result_mock
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj_mock = MagicMock()
+        type(joint_traj_mock).joint_names = client_mock.joint_names
+        self.constrain_trajectories_mock.return_value = joint_traj_mock
 
         whole_body = JointGroup('whole_body')
         whole_body.move_to_joint_positions({'arm_lift_joint': 0.5})
@@ -343,26 +415,66 @@ class WholeBodyTest(testing.RosMockTestCase):
         service = self.joint_group_setting["plan_with_joint_goals_service"]
         self.create_client_mock.assert_any_call(PlanWithJointGoals, service)
         plan_service_client_mock.call_async.assert_called_with(ANY)
+        client_mock.submit.assert_called_with(ANY)
         self.wait_controllers_mock.assert_called_with(ANY, ANY)
 
-    @raises(ValueError)
-    def test_move_to_base_roll_joint(self):
+    def test_move_to_joint_positions_ok_plan_only_true(self):
+        # Setup pre-conditions
         self.get_entry_mock.side_effect = [
             self.joint_group_setting,
-            self.trajectory_setting,
+            self.trajectory_setting['whole_timeopt_filter_service'],
+            self.trajectory_setting['caster_joint'],
+            self.trajectory_setting['watch_rate'],
         ]
-        whole_body = JointGroup('whole_body')
-        whole_body.move_to_joint_positions({'base_roll_joint': 1.0})
+        odom_to_robot_transform, odom_to_hand_transform = self.initial_tf_fixtures()
+        self.async_run_mock.side_effect = [
+            odom_to_robot_transform,
+            odom_to_hand_transform,
+        ]
+        plan_service_client_mock = self.create_client_mock.return_value
+        plan_result_mock = MagicMock()
+        error_code_mock = PropertyMock(return_value=MoveItErrorCodes.SUCCESS)
+        joint_trajectory = JointTrajectory()
+        joint_trajectory.joint_names = self.joint_group_setting['motion_planning_joints']
+        solution_mock = PropertyMock(return_value=joint_trajectory)
+        type(plan_result_mock.result().error_code).val = error_code_mock
+        type(plan_result_mock.result()).solution = solution_mock
+        plan_service_client_mock.call_async.return_value = plan_result_mock
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj_mock = MagicMock()
+        type(joint_traj_mock).joint_names = client_mock.joint_names
+        self.constrain_trajectories_mock.return_value = joint_traj_mock
 
-    @raises(ValueError)
-    def test_move_to_passive_joint(self):
-        self.get_entry_mock.side_effect = [
-            self.joint_group_setting,
-            self.trajectory_setting,
-        ]
         whole_body = JointGroup('whole_body')
         whole_body.move_to_joint_positions(
-            {'hand_r_spring_proximal_joint': 1.0})
+            {'arm_lift_joint': 0.5},
+            plan_only=True)
+
+        # Check post-conditions
+        service = self.joint_group_setting["plan_with_joint_goals_service"]
+        self.create_client_mock.assert_any_call(PlanWithJointGoals, service)
+        plan_service_client_mock.call_async.assert_called_with(ANY)
+        self.assertFalse(client_mock.submit.called)
+
+    def test_move_to_base_roll_joint(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+                self.trajectory_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.move_to_joint_positions({'base_roll_joint': 1.0})
+
+    def test_move_to_passive_joint(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+                self.trajectory_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.move_to_joint_positions(
+                {'hand_r_spring_proximal_joint': 1.0})
 
     def test_move_to_joint_positions_multiple_targets_ok(self):
         # Setup pre-conditions
@@ -386,6 +498,11 @@ class WholeBodyTest(testing.RosMockTestCase):
         type(plan_result_mock.result().error_code).val = error_code_mock
         type(plan_result_mock.result()).solution = solution_mock
         plan_service_client_mock.call_async.return_value = plan_result_mock
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj_mock = MagicMock()
+        type(joint_traj_mock).joint_names = client_mock.joint_names
+        self.constrain_trajectories_mock.return_value = joint_traj_mock
 
         whole_body = JointGroup('whole_body')
         whole_body.move_to_joint_positions_multiple_targets(
@@ -400,60 +517,341 @@ class WholeBodyTest(testing.RosMockTestCase):
         service = self.joint_group_setting["plan_with_joint_goals_service"]
         self.create_client_mock.assert_any_call(PlanWithJointGoals, service)
         plan_service_client_mock.call_async.assert_called_with(ANY)
+        client_mock.submit.assert_called_with(ANY)
         self.wait_controllers_mock.assert_called_with(ANY, ANY)
 
-    @raises(ValueError)
-    def test_move_to_base_roll_joint_multiple_targets(self):
+    def test_move_to_joint_positions_multiple_targets_plan_only_true(self):
+        # Setup pre-conditions
         self.get_entry_mock.side_effect = [
             self.joint_group_setting,
-        ]
-        whole_body = JointGroup('whole_body')
-        whole_body.move_to_joint_positions_multiple_targets(
-            ['base_roll_joint'],
-            [[1.0]]
-        )
-
-    @raises(ValueError)
-    def test_move_to_passive_joint_multiple_targets(self):
-        self.get_entry_mock.side_effect = [
-            self.joint_group_setting,
-        ]
-        whole_body = JointGroup('whole_body')
-        whole_body.move_to_joint_positions_multiple_targets(
-            ['hand_r_spring_proximal_joint'],
-            [[1.0]]
-        )
-
-    @raises(ValueError)
-    def test_move_to_targets_greater_than_joints(self):
-        self.get_entry_mock.side_effect = [
-            self.joint_group_setting,
+            self.trajectory_setting['whole_timeopt_filter_service'],
+            self.trajectory_setting['caster_joint'],
+            self.trajectory_setting['watch_rate'],
         ]
         odom_to_robot_transform, odom_to_hand_transform = self.initial_tf_fixtures()
         self.async_run_mock.side_effect = [
             odom_to_robot_transform,
             odom_to_hand_transform,
         ]
-        whole_body = JointGroup('whole_body')
-        whole_body.move_to_joint_positions_multiple_targets(
-            ['arm_flex_joint', 'arm_lift_joint', 'arm_roll_joint', 'wrist_flex_joint'],
-            [[0.0, 0.0, -1.57, -1.57, 0.0]]
-        )
+        plan_service_client_mock = self.create_client_mock.return_value
+        plan_result_mock = MagicMock()
+        error_code_mock = PropertyMock(return_value=MoveItErrorCodes.SUCCESS)
+        joint_trajectory = JointTrajectory()
+        joint_trajectory.joint_names = self.joint_group_setting['motion_planning_joints']
+        solution_mock = PropertyMock(return_value=joint_trajectory)
+        type(plan_result_mock.result().error_code).val = error_code_mock
+        type(plan_result_mock.result()).solution = solution_mock
+        plan_service_client_mock.call_async.return_value = plan_result_mock
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj_mock = MagicMock()
+        type(joint_traj_mock).joint_names = client_mock.joint_names
+        self.constrain_trajectories_mock.return_value = joint_traj_mock
 
-    @raises(ValueError)
-    def test_move_to_targets_less_than_joints(self):
-        self.get_entry_mock.side_effect = [
-            self.joint_group_setting,
-            self.trajectory_setting,
-        ]
-        odom_to_robot_transform, odom_to_hand_transform = self.initial_tf_fixtures()
-        self.async_run_mock.side_effect = [
-            odom_to_robot_transform,
-            odom_to_hand_transform,
-        ]
         whole_body = JointGroup('whole_body')
         whole_body.move_to_joint_positions_multiple_targets(
             ['arm_flex_joint', 'arm_lift_joint', 'arm_roll_joint',
              'wrist_flex_joint', 'wrist_roll_joint'],
-            [[0.0, 0.0, -1.57, -1.57]]
+            [[0.0, 0.0, -1.57, -1.57, 0.0],
+             [-0.3, 0.0, 0.0, -1.72, 1.57],
+             [-0.3, 0.0, 0.0, -1.72, -1.57]],
+            plan_only=True
         )
+
+        # Check post-conditions
+        service = self.joint_group_setting["plan_with_joint_goals_service"]
+        self.create_client_mock.assert_any_call(PlanWithJointGoals, service)
+        plan_service_client_mock.call_async.assert_called_with(ANY)
+        self.assertFalse(client_mock.submit.called)
+
+    def test_move_to_base_roll_joint_multiple_targets(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.move_to_joint_positions_multiple_targets(
+                ['base_roll_joint'],
+                [[1.0]]
+            )
+
+    def test_move_to_passive_joint_multiple_targets(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.move_to_joint_positions_multiple_targets(
+                ['hand_r_spring_proximal_joint'],
+                [[1.0]]
+            )
+
+    def test_move_to_targets_greater_than_joints(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+            ]
+            odom_to_robot_transform, odom_to_hand_transform = self.initial_tf_fixtures()
+            self.async_run_mock.side_effect = [
+                odom_to_robot_transform,
+                odom_to_hand_transform,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.move_to_joint_positions_multiple_targets(
+                ['arm_flex_joint', 'arm_lift_joint', 'arm_roll_joint', 'wrist_flex_joint'],
+                [[0.0, 0.0, -1.57, -1.57, 0.0]]
+            )
+
+    def test_move_to_targets_less_than_joints(self):
+        with self.assertRaises(ValueError):
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+                self.trajectory_setting,
+            ]
+            odom_to_robot_transform, odom_to_hand_transform = self.initial_tf_fixtures()
+            self.async_run_mock.side_effect = [
+                odom_to_robot_transform,
+                odom_to_hand_transform,
+            ]
+            whole_body = JointGroup('whole_body')
+            whole_body.move_to_joint_positions_multiple_targets(
+                ['arm_flex_joint', 'arm_lift_joint', 'arm_roll_joint',
+                 'wrist_flex_joint', 'wrist_roll_joint'],
+                [[0.0, 0.0, -1.57, -1.57]]
+            )
+
+    def test_move_end_effector_by_line(self):
+        self.get_entry_mock.side_effect = [
+            self.joint_group_setting,
+            self.trajectory_setting['whole_timeopt_filter_service'],
+            self.trajectory_setting['caster_joint'],
+        ]
+        odom_to_robot_transform, _ = self.initial_tf_fixtures()
+        self.async_run_mock.side_effect = [
+            odom_to_robot_transform,
+            odom_to_robot_transform,
+        ]
+        plan_service_client_mock = MagicMock()
+        self.create_client_mock.side_effect = [plan_service_client_mock, MagicMock()]
+
+        error_code_mock = PropertyMock(return_value=MoveItErrorCodes.SUCCESS)
+
+        joint_trajectory = JointTrajectory()
+        joint_trajectory.joint_names = self.joint_group_setting['motion_planning_joints']
+        solution_mock = PropertyMock(return_value=joint_trajectory)
+
+        base_pose = Transform()
+        base_point = MultiDOFJointTrajectoryPoint()
+        base_point.transforms = [base_pose]
+        base_trajectory = MultiDOFJointTrajectory()
+        base_trajectory.points = [base_point]
+        base_solution_mock = PropertyMock(return_value=base_trajectory)
+
+        plan_result_mock = MagicMock()
+        type(plan_result_mock.result().error_code).val = error_code_mock
+        type(plan_result_mock.result()).solution = solution_mock
+        type(plan_result_mock.result()).base_solution = base_solution_mock
+        plan_service_client_mock.call_async.return_value = plan_result_mock
+
+        self.position_control_client_mock.joint_names = ['odom_x', 'odom_y', 'odom_t']
+
+        whole_body = JointGroup('whole_body')
+        whole_body.move_end_effector_by_line((0.1, 0.2, 0.3), 0.1)
+
+        service = self.joint_group_setting["plan_with_hand_line_service"]
+        self.create_client_mock.assert_any_call(PlanWithHandLine, service)
+        plan_service_client_mock.call_async.assert_called_with(ANY)
+        self.wait_controllers_mock.assert_called_with(ANY, ANY)
+
+        plan_req = plan_service_client_mock.call_async.call_args[0][0]
+        self.assertEqual(len(plan_req.goals), 1)
+        self.assertEqual(plan_req.goals[0].end_frame_id, 'hand_palm_link')
+        self.assertEqual(plan_req.goals[0].axis.x, 0.1)
+        self.assertEqual(plan_req.goals[0].axis.y, 0.2)
+        self.assertEqual(plan_req.goals[0].axis.z, 0.3)
+        self.assertEqual(plan_req.goals[0].distance, 0.1)
+        self.assertEqual(set(plan_req.use_joints),
+                         set(self.joint_group_setting['use_joints_for_moving_end_effector']['hand_palm_link']))
+
+    def test_move_end_effectors_by_line(self):
+        self.get_entry_mock.side_effect = [
+            self.joint_group_setting,
+            self.trajectory_setting['whole_timeopt_filter_service'],
+            self.trajectory_setting['caster_joint'],
+        ]
+        odom_to_robot_transform, _ = self.initial_tf_fixtures()
+        self.async_run_mock.side_effect = [
+            odom_to_robot_transform,
+            odom_to_robot_transform,
+        ]
+        plan_service_client_mock = MagicMock()
+        self.create_client_mock.side_effect = [plan_service_client_mock, MagicMock()]
+
+        error_code_mock = PropertyMock(return_value=MoveItErrorCodes.SUCCESS)
+
+        joint_trajectory = JointTrajectory()
+        joint_trajectory.joint_names = self.joint_group_setting['motion_planning_joints']
+        solution_mock = PropertyMock(return_value=joint_trajectory)
+
+        base_pose = Transform()
+        base_point = MultiDOFJointTrajectoryPoint()
+        base_point.transforms = [base_pose]
+        base_trajectory = MultiDOFJointTrajectory()
+        base_trajectory.points = [base_point]
+        base_solution_mock = PropertyMock(return_value=base_trajectory)
+
+        plan_result_mock = MagicMock()
+        type(plan_result_mock.result().error_code).val = error_code_mock
+        type(plan_result_mock.result()).solution = solution_mock
+        type(plan_result_mock.result()).base_solution = base_solution_mock
+        plan_service_client_mock.call_async.return_value = plan_result_mock
+
+        self.position_control_client_mock.joint_names = ['odom_x', 'odom_y', 'odom_t']
+
+        goals = [HandLineGoal(frame_id='hand_palm_link', axis=(0.1, 0.2, 0.3), distance=0.1),
+                 HandLineGoal(frame_id='dummy_link', axis=(0.4, 0.5, 0.6), distance=0.7)]
+
+        whole_body = JointGroup('whole_body')
+        whole_body.move_end_effectors_by_line(goals)
+
+        service = self.joint_group_setting["plan_with_hand_line_service"]
+        self.create_client_mock.assert_any_call(PlanWithHandLine, service)
+        plan_service_client_mock.call_async.assert_called_with(ANY)
+        self.wait_controllers_mock.assert_called_with(ANY, ANY)
+
+        plan_req = plan_service_client_mock.call_async.call_args[0][0]
+        self.assertEqual(len(plan_req.goals), 2)
+
+        def extract(goals, frame_id):
+            for goal in goals:
+                if goal.end_frame_id == frame_id:
+                    return goal
+            return None
+
+        plan_goal_1 = extract(plan_req.goals, 'hand_palm_link')
+        self.assertEqual(plan_goal_1.end_frame_id, 'hand_palm_link')
+        self.assertEqual(plan_goal_1.axis.x, 0.1)
+        self.assertEqual(plan_goal_1.axis.y, 0.2)
+        self.assertEqual(plan_goal_1.axis.z, 0.3)
+        self.assertEqual(plan_goal_1.distance, 0.1)
+
+        plan_goal_2 = extract(plan_req.goals, 'dummy_link')
+        self.assertEqual(plan_goal_2.end_frame_id, 'dummy_link')
+        self.assertEqual(plan_goal_2.axis.x, 0.4)
+        self.assertEqual(plan_goal_2.axis.y, 0.5)
+        self.assertEqual(plan_goal_2.axis.z, 0.6)
+        self.assertEqual(plan_goal_2.distance, 0.7)
+
+        self.assertEqual(set(plan_req.use_joints),
+                         set(self.joint_group_setting['use_joints_for_moving_end_effector']['hand_palm_link']
+                             + self.joint_group_setting['use_joints_for_moving_end_effector']['dummy_link']))
+
+    def test_execute_ok(self):
+        # Setup pre-conditions
+        self.get_entry_mock.side_effect = [
+            self.joint_group_setting,
+        ]
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj = JointTrajectory()
+        joint_traj.joint_names = client_mock.joint_names
+
+        whole_body = JointGroup('whole_body')
+        whole_body.execute(joint_traj)
+
+        client_mock.submit.assert_called_with(ANY)
+        self.assertFalse(self.wait_controllers_mock.called)
+
+    def test_execute_ng(self):
+        with self.assertRaises(ValueError):
+            # Setup pre-conditions
+            self.get_entry_mock.side_effect = [
+                self.joint_group_setting,
+            ]
+
+            whole_body = JointGroup('whole_body')
+            whole_body.execute('hoge')
+
+    def test_is_moving(self):
+        # Setup pre-conditions
+        self.get_entry_mock.side_effect = [
+            self.joint_group_setting,
+        ]
+        self.traj_controller_mock().get_state.side_effect = [
+            GoalStatus.STATUS_EXECUTING,
+            GoalStatus.STATUS_EXECUTING,
+            GoalStatus.STATUS_EXECUTING,
+            GoalStatus.STATUS_SUCCEEDED,
+            GoalStatus.STATUS_SUCCEEDED,
+            GoalStatus.STATUS_SUCCEEDED,
+        ]
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj = JointTrajectory()
+        joint_traj.joint_names = client_mock.joint_names
+
+        whole_body = JointGroup('whole_body')
+        whole_body.execute(joint_traj)
+
+        self.assertTrue(whole_body.is_moving())
+        self.assertFalse(whole_body.is_moving())
+
+    def test_is_succeeded(self):
+        # Setup pre-conditions
+        self.get_entry_mock.side_effect = [
+            self.joint_group_setting,
+        ]
+        self.traj_controller_mock().get_state.side_effect = [
+            GoalStatus.STATUS_EXECUTING,
+            GoalStatus.STATUS_EXECUTING,
+            GoalStatus.STATUS_EXECUTING,
+            GoalStatus.STATUS_SUCCEEDED,
+            GoalStatus.STATUS_SUCCEEDED,
+            GoalStatus.STATUS_SUCCEEDED,
+        ]
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj = JointTrajectory()
+        joint_traj.joint_names = client_mock.joint_names
+
+        whole_body = JointGroup('whole_body')
+        whole_body.execute(joint_traj)
+
+        self.assertFalse(whole_body.is_succeeded())
+        self.assertTrue(whole_body.is_succeeded())
+
+    def test_wait_goal(self):
+        # Setup pre-conditions
+        self.get_entry_mock.side_effect = [
+            self.joint_group_setting,
+        ]
+        self.traj_controller_mock().get_state.return_value = \
+            GoalStatus.STATUS_EXECUTING
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj = JointTrajectory()
+        joint_traj.joint_names = client_mock.joint_names
+
+        whole_body = JointGroup('whole_body')
+        whole_body.execute(joint_traj)
+        whole_body.wait_goal()
+
+        self.wait_controllers_mock.assert_called_with(ANY, ANY)
+
+    def test_cancel_goal(self):
+        # Setup pre-conditions
+        self.get_entry_mock.side_effect = [
+            self.joint_group_setting,
+        ]
+        self.traj_controller_mock().get_state.return_value = \
+            GoalStatus.STATUS_EXECUTING
+        client_mock = self.traj_controller_mock.return_value
+        client_mock.joint_names = ['hoge']
+        joint_traj = JointTrajectory()
+        joint_traj.joint_names = client_mock.joint_names
+
+        whole_body = JointGroup('whole_body')
+        whole_body.execute(joint_traj)
+        whole_body.cancel_goal()
+
+        client_mock.cancel.assert_called()

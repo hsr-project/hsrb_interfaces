@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -26,11 +26,6 @@
 # vim: fileencoding=utf-8
 """This module contains classes to control end-effector."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import warnings
 
 import action_msgs.msg as action_msgs
@@ -52,19 +47,9 @@ from . import settings
 from . import utils
 
 _GRIPPER_FOLLOW_TRAJECTORY_TIMEOUT = 20.0
-_GRIPPER_GRASP_TIMEOUT = 20.0
-_GRIPPER_APPLY_FORCE_TIMEOUT = 10.0
 _GRIPPER_APPLY_FORCE_DELICATE_THRESHOLD = 0.8
 _HAND_MOMENT_ARM_LENGTH = 0.07
 _JOINT_STATE_SUB_TIMEOUT = 3.0
-
-# TODO(OTA): 以下パラメータをurdfから取ってくる
-_PALM_TO_PROXIMAL_Y = 0.0245
-_PROXIMAL_TO_DISTAL_Z = 0.07
-_DISTAL_JOINT_ANGLE_OFFSET = 0.087
-# TODO(OTA): tip_linkがモデルから浮いているので修正する
-_DISTAL_TO_TIP_Y = 0.01865
-_DISTAL_TO_TIP_Z = 0.04289
 
 
 class Gripper(robot.Item):
@@ -84,10 +69,6 @@ class Gripper(robot.Item):
         self._name = name
         self._joint_names = self._setting['joint_names']
         prefix = self._setting['prefix']
-        self._left_finger_joint_name = self._setting[
-            'left_finger_joint_name']
-        self._right_finger_joint_name = self._setting[
-            'right_finger_joint_name']
         self._follow_joint_trajectory_client = ActionClient(
             self._node,
             FollowJointTrajectory,
@@ -166,7 +147,7 @@ class Gripper(robot.Item):
         self._fingertip_distance_sub.wait_for_message()
         return self._fingertip_distance_sub.data.data
 
-    def set_distance(self, distance, control_time=3.0, sync=True):
+    def set_distance(self, distance, control_time=5.0, sync=True):
         """Command set gripper finger tip distance.
 
         Args:
@@ -220,7 +201,7 @@ class Gripper(robot.Item):
         """
         msg = ' '.join(["gripper.grasp() is depreacated."
                         "Use gripper.apply_force() instead."])
-        warnings.warn(msg, exceptions.DeprecationWarning)
+        warnings.warn(msg, exceptions.HsrbInterfaceDeprecationWarning)
         if effort > 0.0:
             raise exceptions.GripperError("effort shold be negative.")
         else:
@@ -269,7 +250,7 @@ class Gripper(robot.Item):
             return self.get_state() == goal_status
 
     def _wait_controller(self, msg="", wait_time_max=_GRIPPER_FOLLOW_TRAJECTORY_TIMEOUT):
-        # Since the node's clock may not measure time accurately, use the system clock
+        # Since the node's clock may not measure time accurately, the system clock is used
         start_time = rclpy.clock.Clock().now()
         elapsed_time = rclpy.duration.Duration(seconds=0.0)
         while elapsed_time < rclpy.duration.Duration(seconds=wait_time_max):
@@ -279,12 +260,16 @@ class Gripper(robot.Item):
                     return
                 if state != action_msgs.GoalStatus.STATUS_EXECUTING:
                     self.cancel_goal()
-                    msg += " state {0}".format(state)
+                    msg += " state {0}".format(utils.get_action_state_text(state))
                     raise exceptions.GripperError(msg)
                 elapsed_time = rclpy.clock.Clock().now() - start_time
             except KeyboardInterrupt:
-                self.cancel_goal()
+                break
+
         self.cancel_goal()
+
+        if elapsed_time > rclpy.duration.Duration(seconds=wait_time_max):
+            raise exceptions.GripperError("Timeout")
 
     def get_state(self):
         """Get a status of the action client"""

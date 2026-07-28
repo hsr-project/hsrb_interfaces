@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -30,7 +30,6 @@
 import _testing as testing
 from hsrb_interface import Robot
 from hsrb_interface import utils
-from nose.tools import eq_
 import rclpy
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 
@@ -56,10 +55,9 @@ class UtilsTestCase(testing.RosMockTestCase):
             sub._callback,
             qos_profile)
 
-
-def test_iterate():
-    """Test iterate function."""
-    data = list(utils.iterate(lambda: 2, 5))
-    eq_(len(data), 5)
-    for datum in data:
-        eq_(2, datum)
+    def test_iterate(self):
+        """Test iterate function."""
+        data = list(utils.iterate(lambda: 2, 5))
+        self.assertEqual(len(data), 5)
+        for datum in data:
+            self.assertEqual(2, datum)

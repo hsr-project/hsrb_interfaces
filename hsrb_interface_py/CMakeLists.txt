@@ -7,7 +7,6 @@ find_package(hsr_kinematics REQUIRED)
 find_package(Boost REQUIRED COMPONENTS python)
 find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(PythonLibs REQUIRED)
 
 set(_package_namespace hsrb_interface)
 add_library(${PROJECT_NAME}_extension SHARED
@@ -50,6 +49,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_whole_body test/test_whole_body.py)
   ament_add_pytest_test(test_collision_world test/test_collision_world.py)
   ament_add_pytest_test(test_omni_base test/test_omni_base.py)
+  ament_add_pytest_test(test_settings test/test_settings.py)
 
 endif()
 

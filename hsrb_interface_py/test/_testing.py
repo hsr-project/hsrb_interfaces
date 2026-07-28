@@ -1,4 +1,4 @@
-# Copyright (c) 2024 TOYOTA MOTOR CORPORATION
+# Copyright (c) 2026 TOYOTA MOTOR CORPORATION
 # All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the disclaimer
@@ -165,7 +165,8 @@ class HsrbInterfaceTest(unittest.TestCase):
 
     def setUp(self):
         """Initialize class variables"""
-        self.robot = hsrb_interface.Robot()
+        hsrb_interface.settings.load_settings()
+        self.robot = hsrb_interface.Robot(robot_name='hsrb')
         # Wait until simluation clock starts
         now = rclpy.clock.Clock().now()
         while now == rclpy.time.Time():
@@ -293,6 +294,7 @@ class HsrbInterfaceTest(unittest.TestCase):
         pos_delta = 0.0 if pos_delta is None else pos_delta
         ori_delta = 0.0 if ori_delta is None else ori_delta
         while True:
+            rclpy.spin_once(self.robot._conn)
             pose = self.whole_body.get_end_effector_pose(frame)
             pos_error = vector3_distance(pose[0], goal[0])
             ori_error = quaternion_distance(pose[1], goal[1])
